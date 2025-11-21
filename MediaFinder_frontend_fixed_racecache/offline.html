@@ -1,0 +1,24 @@
+﻿<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediaFinder – Offline</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body{display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:24px;background:var(--bg);color:var(--fg);}
+    .offline-card{max-width:420px;border:1px solid var(--border);border-radius:20px;padding:32px;background:color-mix(in oklab,var(--panel) 90%, transparent);
+      box-shadow:0 20px 45px rgba(0,0,0,.35);backdrop-filter:blur(6px);}
+    .offline-card h1{margin-top:0;font-size:28px;}
+    .offline-card p{color:var(--muted);}
+    .offline-card button{margin-top:16px;padding:10px 18px;border-radius:999px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg);}    
+  </style>
+</head>
+<body>
+  <div class="offline-card" role="status">
+    <h1>Anda Sedang Offline</h1>
+    <p>Konten terbaru belum dapat dimuat karena koneksi terputus. Tetap tenang, fitur utama tetap tersedia secara lokal.</p>
+    <button type="button" onclick="location.reload()">Coba Muat Ulang</button>
+  </div>
+</body>
+</html>

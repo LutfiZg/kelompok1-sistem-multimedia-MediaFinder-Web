@@ -1,0 +1,628 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MediaFinder Web — v1.8 (Functions Locked)</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+  <meta name="theme-color" content="#111111">
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/ffmpeg.min.js"></script>
+<style>.skip{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden} .skip:focus{left:8px;top:8px;width:auto;height:auto;background:#fff;color:#000;padding:8px;z-index:9999}</style>
+</head>
+<body>
+<a href="#main" id="skipLink" class="skip">Skip to content</a>
+<header>
+  <h1>MediaFinder Web — v1.8 (Functions Locked)</h1>
+ <nav>
+    <button class="tab-btn" data-tab="#tab-corpus" data-i18n="nav_corpus">Korpus</button>
+    <button class="tab-btn" data-tab="#tab-eval" aria-controls="tab-eval" data-i18n="nav_eval">Evaluasi</button>
+    <button class="tab-btn" data-tab="#tab-settings" data-i18n="nav_settings">Pengaturan</button>
+    <button class="tab-btn" data-tab="#tab-help" data-i18n="nav_help">Bantuan</button>
+      <button class="tab-btn active" data-tab="#tab-indeks" data-i18n="nav_index">Indeks</button>
+      <button class="tab-btn" data-tab="#tab-pencarian" data-i18n="nav_search">Pencarian</button>
+      <button class="tab-btn" data-tab="#tab-analisis" data-i18n="nav_analysis">Analisis</button>
+  </nav>
+  <div class="header-actions">
+    <label><input type="checkbox" id="presentMode"> Mode Presentasi</label>
+    <label><input type="checkbox" id="autoHideHud" checked> Auto-hide HUD</label>
+    <button id="fsToggle" class="tab-btn">⛶ Full Screen</button>
+    <button id="installBtn" class="tab-btn" style="display:none">⬇️ Install</button>
+    <span id="verPill" class="badge">v1.8</span>
+    <button id="themeToggle" class="tab-btn">🌗 Tema</button>
+    <button id="resetBtn" class="tab-btn danger">Reset</button>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" aria-label="Ringkasan aplikasi">
+    <div class="hero__content">
+      <span class="pill" id="textHeroPill">Media Intelligence Suite</span>
+      <h2 id="textHeroTitle">Pengindeksan & pencarian video yang presisi, cepat, dan privat.</h2>
+      <p id="textHeroDesc">MediaFinder memadukan pHash visual, fingerprint audio, dan analitik heatmap sehingga tim Anda dapat memastikan kemiripan konten hanya dalam hitungan detik.</p>
+      <div class="hero__actions">
+        <button class="primary" data-tab-target="#tab-indeks" id="btnHeroIndex">Mulai Indeks</button>
+        <button data-tab-target="#tab-pencarian" id="btnHeroSearch">Cari Kemiripan</button>
+        <button class="ghost" data-tab-target="#tab-analisis" id="btnHeroAnalysis">Buka Analisis</button>
+        <button class="ghost" id="openOnboardGuide">Panduan Singkat</button>
+      </div>
+      <ul class="hero__chips">
+        <li id="chipPhash">64-bit perceptual hash</li>
+        <li id="chipChroma">12-bin chroma audio</li>
+        <li id="chipFusion">Late fusion scoring</li>
+        <li id="chipHeatmap">Heatmap & DTW viewer</li>
+        <li id="chipLab">Lab robustness ffmpeg.wasm</li>
+      </ul>
+    </div>
+    <div class="hero__stats">
+      <div class="stat-card">
+        <p id="labelStatItems">Item Terindeks</p>
+        <strong id="statItems">0</strong>
+        <span id="statMode">Mode Lokal</span>
+      </div>
+      <div class="stat-card">
+        <p id="labelStatHashes">Fingerprint Timeline</p>
+        <strong id="statHashes">0</strong>
+        <span id="hintStatHashes">Total hash frame & chroma</span>
+      </div>
+      <div class="stat-card highlight status-card">
+        <p id="labelStatStatus">Status</p>
+        <strong id="statLastAction">Siap</strong>
+        <span id="statCTA">Gunakan tombol di samping untuk mulai</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-indeks" class="tab active">
+    <div class="panel">
+      <h2 id="titleImport">Impor Media</h2>
+      <input type="file" id="fileInput" accept="video/*" multiple>
+      <div class="grid2">
+        <label><input type="checkbox" id="saveOriginal" checked> Simpan File Asli (untuk preview) — batas ~120MB</label>
+        <div>
+          <button id="backupBtn" class="secondary">Backup Index (JSON)</button>
+          <label class="buttonlike"><input type="file" id="restoreInput" accept="application/json" style="display:none;"> Pulihkan Index</label>
+        </div>
+      </div>
+      <div class="grid2">
+        <label>Metode Keyframe
+          <select id="kfMode">
+            <option value="hybrid" selected>Hybrid (periodik + Δ-hist)</option>
+            <option value="periodic">Periodik saja</option>
+          </select>
+        </label>
+        <label>Δ-hist threshold
+          <input type="number" id="histThrIdx" min="0.02" max="0.5" step="0.01" value="0.12">
+        </label>
+      </div>
+      <div class="grid2">
+        <label>Min interval (detik)
+          <input type="number" id="minIntervalIdx" min="0.1" max="2" step="0.1" value="0.5">
+        </label>
+        <span></span>
+      </div>
+      <p class="hint">Pilih 1–10 berkas video. Ekstraksi pHash berjalan di browser (default 1 fps, batas 180 frame/berkas).</p>
+      <progress id="progress" max="100" value="0" style="display:none;"></progress>
+      <pre id="log" class="log"></pre>
+    </div>
+    <div class="panel">
+      <h2 id="titleImportList">Daftar Media Terindeks</h2>
+      <table id="mediaTable">
+        <thead><tr><th>Nama</th><th>Durasi (s)</th><th>#pHash</th><th>#Chroma</th><th scope="col">Aksi</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-pencarian" class="tab">
+    <div class="panel">
+      <h2 id="titleSearchUpload">Upload Kueri</h2>
+      <input type="file" id="queryInput" accept="video/*">
+      <div class="grid2">
+        <label>Ambang Skor (0–1)<input type="number" id="threshold" min="0" max="1" step="0.01" value="0.7"></label>
+        <label>Sampel fps (video)<input type="number" id="fps" min="0.25" max="2" step="0.25" value="1"></label>
+      </div>
+      <div class="grid2">
+        <label>Bobot Video (w_v)<input type="number" id="wv" min="0" max="1" step="0.05" value="0.5"></label>
+        <label>Durasi Segmen Audio (s)<input type="number" id="segSec" min="0.25" max="2" step="0.25" value="1"></label>
+      </div>
+      <div class="grid2">
+        <label><input type="checkbox" id="useAudio"> Gunakan Audio (beta)</label>
+        <span class="hint">Nonaktifkan jika upload bermasalah.</span>
+      </div>
+      <div class="grid2">
+        <label>Bobot Audio (w_a)<input type="number" id="wa" min="0" max="1" step="0.05" value="0.5"></label>
+        <span></span>
+      </div>
+      <div class="grid2">
+        <label>Metode Keyframe
+          <select id="kfModeQ">
+            <option value="hybrid" selected>Hybrid (periodik + Δ-hist)</option>
+            <option value="periodic">Periodik saja</option>
+          </select>
+        </label>
+        <label>Δ-hist threshold
+          <input type="number" id="histThr" min="0.02" max="0.5" step="0.01" value="0.12">
+        </label>
+      </div>
+      <div class="grid2">
+        <label>Min interval (detik)
+          <input type="number" id="minInterval" min="0.1" max="2" step="0.1" value="0.5">
+        </label>
+        <span></span>
+      </div>
+      <button id="searchBtn">Cari Mirip</button>
+      <pre id="logSearch" class="log"></pre>
+    </div>
+    <div class="panel">
+      <h2 id="titleSearchResults">Hasil Kandidat</h2>
+      <table id="resultTable" role="table" aria-label="Hasil pencarian">
+        <thead><tr><th>Nama</th><th>Skor Global</th><th scope="col">Aksi</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-analisis" class="tab">
+    <div class="panel grid2">
+      <div>
+        <h3 id="titlePlayerQuery">Player Kueri</h3>
+        <video id="playerQuery" controls></video>
+      </div>
+      <div>
+        <h3 id="titlePlayerTarget">Player Target</h3>
+        <video id="playerTarget" controls></video>
+      <p class="hint" id="playerTargetHint">Preview target muncul jika file tersimpan lokal atau backend menyediakan cuplikan.</p>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 id="titleTimeline">Timeline Kecocokan (per detik)</h3>
+      <div class="timeline-wrapper">
+        <div class="timeline-stage" id="timelineStage">
+          <canvas id="timeline" role="img" aria-label="grafik timeline kemiripan" tabindex="0" height="80"></canvas>
+          <div id="timelineOverlay" class="timeline-overlay" aria-hidden="true"></div>
+          <div id="timelineSelection" class="timeline-selection" hidden></div>
+        </div>
+        <div class="timeline-actions">
+          <button id="highlightAuto" class="secondary">Auto Highlight</button>
+          <button id="highlightClear" class="ghost">Bersihkan</button>
+          <button id="highlightExport">Export Highlight</button>
+        </div>
+        <ul id="highlightList" class="highlight-list" aria-live="polite"></ul>
+      </div>
+      <p class="hint" id="hintTimeline">Seret di timeline untuk menandai segmen; klik highlight untuk melompat dan ekspor klip otomatis.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <h3 id="titleHeatmap">Heatmap Kueri vs Target (pHash)</h3>
+        <button class="info-btn" data-onboard="heatmap" aria-label="Apa itu heatmap?">?</button>
+      </div>
+      <div class="grid2">
+        <label><input type="checkbox" id="showDTW" checked> Tampilkan DTW Overlay</label>
+        <label><input type="checkbox" id="dtwGradient" checked> Warna Jalur (bergradasi)</label>
+        <button id="recomputeHM" class="secondary">Rehitung Heatmap</button>
+      </div>
+      <div class="heatmap-stage" role="group" aria-label="Kanvas heatmap dan overlay">
+        <canvas id="heatmap" role="img" aria-label="Heatmap kemiripan" tabindex="0" height="240"></canvas>
+        <div id="heatmapOverlay" class="heatmap-overlay" aria-hidden="true"></div>
+      </div>
+      <div id="presentOverlay" class="overlay-controls" aria-hidden="true">
+        <button id="ovPlayQ">&#9654; Q</button>
+        <button id="ovPlayT">&#9654; T</button>
+        <button id="ovPause">&#9208;</button>
+        <button id="ovCenter">&#9711; Tengah</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h3 id="titleAdvanced">Analisis Lanjutan (Alignment & DTW)</h3>
+      <div class="grid2">
+        <div>
+          <h4 id="titleAlign">Sliding Alignment</h4>
+          <label>Max Shift (detik)<input type="number" id="maxShift" value="15" min="1" max="60"></label>
+          <label>Window (detik)<input type="number" id="winSec" value="30" min="5" max="120"></label>
+          <button id="runAlign">Jalankan Alignment</button>
+          <p id="alignInfo" class="hint"></p>
+          <canvas id="alignPlot" height="80"></canvas>
+        </div>
+        <div>
+          <h4 id="titleDTW">Dynamic Time Warping (DTW)</h4><button class="info-btn" data-onboard="dtw" aria-label="Apa itu DTW?">?</button>
+          <label>Band Size (detik)<input type="number" id="dtwBand" value="10" min="1" max="50"></label>
+          <button id="runDTW">Jalankan DTW</button>
+          <p id="dtwInfo" class="hint"></p>
+          <canvas id="dtwPlot" height="80"></canvas>
+        </div>
+      </div>
+    </div>
+    <h3>Top Segmen Mirip</h3>
+      <div class="grid2">
+        <label>Jumlah Top-N<input type="number" id="topN" min="3" max="20" step="1" value="5"></label>
+        <label>Jarak Min (detik)<input type="number" id="minSep" min="1" max="20" step="1" value="3"></label>
+      </div>
+      <button id="calcTop">Hitung Top-N</button>
+      <table id="topTable"><thead><tr><th>#</th><th>t (s)</th><th>Skor</th><th scope="col">Aksi</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="panel">
+      <h3 id="titleSnapshot">Snapshot Bukti</h3>
+      <p class="hint">Ambil frame kueri/target pada waktu Top-N untuk bukti visual.</p>
+      <button id="grabShots">Ambil Snapshot</button>
+      <button id="downloadShots" class="secondary">Unduh Semua (ZIP)</button>
+      <div id="shotsGrid" class="shots"></div>
+    </div>
+    <div class="panel" id="panelInsights">
+      <div class="panel-head">
+        <h3>Insight Otomatis</h3>
+        <div class="key-actions">
+          <button id="refreshInsights" class="secondary">Perbarui Insight</button>
+          <span id="insightFeedbackMsg" class="hint"></span>
+        </div>
+      </div>
+      <div id="insightList" class="insight-list" aria-live="polite"></div>
+    </div>
+    <div class="panel panel-contrast">
+      <h4 id="titleSim">Simulasi Transformasi pada Kueri</h4>
+      <p class="hint">Jalankan ulang ekstraksi fitur pada video kueri dengan simulasi degradasi visual.</p>
+      <div class="grid2">
+        <label>Downscale Factor<input type="number" id="rbDown" min="1" max="4" step="1" value="1"></label>
+        <label>Blur (px)<input type="number" id="rbBlur" min="0" max="5" step="0.5" value="0"></label>
+      </div>
+      <div class="grid2">
+        <label>Brightness (%)<input type="number" id="rbBright" min="50" max="150" step="10" value="100"></label>
+        <label>Speed Factor<input type="number" id="rbSpeed" min="0.5" max="2" step="0.1" value="1"></label>
+      </div>
+      <button id="reextractQuery">Re-ekstrak Kueri (Simulasi)</button>
+    </div>
+      <h3 id="titleRobust">Robustness (ffmpeg.wasm)</h3><button class="info-btn" data-onboard="robustness" aria-label="Apa itu lab robustness?">?</button>
+      <p class="hint">Butuh internet untuk memuat ffmpeg.wasm (~25–30 MB). Gunakan cuplikan singkat agar proses lebih cepat.</p>
+      <div class="grid2">
+        <label>Start (detik)<input type="number" id="rbStart" min="0" step="1" value="0"></label>
+        <label>Durasi (detik)<input type="number" id="rbDur" min="3" max="30" step="1" value="10"></label>
+      </div>
+      <div class="grid2">
+        <label>Resolusi
+          <select id="rbRes">
+            <option value="orig" selected>Original</option>
+            <option value="1280x720">1280x720</option>
+            <option value="854x480">854x480</option>
+            <option value="640x360">640x360</option>
+          </select>
+        </label>
+        <label>CRF / Qualitas
+          <select id="rbCRF">
+            <option value="23" selected>23 (baik)</option>
+            <option value="28">28 (sedang)</option>
+            <option value="35">35 (rendah)</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid2">
+        <button id="rbGenTest">Generate & Test</button>
+        <button id="rbRunBatch" class="secondary">Run Batch</button>
+      </div>
+      <div class="grid2">
+        <div>
+          <strong>Resolusi:</strong><br>
+          <label><input type="checkbox" class="rbResOpt" value="orig" checked> Original</label>
+          <label><input type="checkbox" class="rbResOpt" value="1280x720" checked> 1280×720</label>
+          <label><input type="checkbox" class="rbResOpt" value="854x480"> 854×480</label>
+          <label><input type="checkbox" class="rbResOpt" value="640x360"> 640×360</label>
+        </div>
+        <div>
+          <strong>CRF:</strong><br>
+          <label><input type="checkbox" class="rbCrfOpt" value="23" checked> 23</label>
+          <label><input type="checkbox" class="rbCrfOpt" value="28" checked> 28</label>
+          <label><input type="checkbox" class="rbCrfOpt" value="35"> 35</label>
+        </div>
+      </div>
+      <div class="grid2">
+        <button id="rbExportCsv" class="secondary">Export CSV</button>
+        <button id="rbExportPdf" class="secondary">Export PDF (Robustness)</button>
+      </div>
+      <pre id="rbLog"></pre>
+      <canvas id="rbChart" height="160" style="width:100%;background:#fff;border:1px solid var(--border);border-radius:8px"></canvas>
+      <table id="rbTable">
+        <thead><tr><th>Variant</th><th>Ukuran</th><th>Skor Global</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="panel subtle">
+        <h4>Scheduler Batch Robustness</h4>
+        <p class="hint">Rencanakan kombinasi uji lintas versi dan jalankan otomatis untuk dibandingkan.</p>
+        <div class="grid2">
+          <label>Nama Campaign<input type="text" id="rbSchedName" placeholder="contoh: nightly build A"></label>
+          <label>Versi / Tag<input type="text" id="rbSchedVersion" placeholder="v1.2.3"></label>
+        </div>
+        <div class="grid2">
+          <label>Resolusi (comma)<input type="text" id="rbSchedRes" placeholder="orig,1280x720" value="orig,1280x720"></label>
+          <label>CRF list<input type="text" id="rbSchedCrf" placeholder="23,28,35" value="23,28,35"></label>
+        </div>
+        <div class="grid2">
+          <label>Start (detik)<input type="number" id="rbSchedStart" min="0" value="0"></label>
+          <label>Durasi (detik)<input type="number" id="rbSchedDur" min="3" value="10"></label>
+        </div>
+        <div class="timeline-actions">
+          <button id="rbSchedAdd" class="secondary">Tambahkan ke Scheduler</button>
+          <button id="rbSchedRun">Jalankan Scheduler</button>
+          <button id="rbSchedClear" class="ghost">Bersihkan Scheduler</button>
+          <button id="rbSchedExport" class="secondary">Export Riwayat</button>
+        </div>
+        <div class="grid2">
+          <div>
+            <h5>Daftar Terjadwal</h5>
+            <table id="rbSchedTable" class="mini-table">
+              <thead><tr><th>Versi</th><th>Variant</th><th>Range</th><th>Aksi</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div>
+            <h5>Riwayat Batch</h5>
+            <table id="rbHistoryTable" class="mini-table">
+              <thead><tr><th>Waktu</th><th>Versi</th><th>Variant</th><th>Skor</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Ekspor Hasil</h3>
+      <button id="exportJson">Ekspor JSON</button>
+      <button id="exportCsv">Ekspor CSV</button>
+      <button id="exportPdf">Export PDF</button>
+    </div>
+  </section>
+
+<section id="tab-settings" class="tab" style="display:none">
+  <div class="panel">
+    <h3>Pengaturan Aplikasi</h3>
+    <div class="grid2">
+      <label>Default FPS Ekstraksi<input type="number" id="st_fps" min="0.5" max="5" step="0.5" value="1"></label>
+      <label>Segmen Audio (detik)<input type="number" id="st_seg" min="0.25" max="2" step="0.25" value="1"></label>
+    </div>
+    <div class="grid2">
+      <label>Bobot Video (w_v)<input type="number" id="st_wv" min="0" max="1" step="0.05" value="0.5"></label>
+      <label>Bobot Audio (w_a)<input type="number" id="st_wa" min="0" max="1" step="0.05" value="0.5"></label>
+    </div>
+    <div class="grid2">
+      <label>Ambang Tampilan Heatmap<input type="number" id="st_hmThr" min="0" max="1" step="0.05" value="0.2"></label>
+      <label>Mode Local-only (tanpa CDN)<input type="checkbox" id="st_localOnly"></label>
+    </div>
+    <div class="grid2">
+      <label>Mode Tema
+        <select id="st_themeMode">
+          <option value="system">Ikuti Sistem</option>
+          <option value="light">Terang</option>
+          <option value="dark">Gelap</option>
+        </select>
+      </label>
+      <span></span>
+    </div>
+    <div class="grid2">
+      <label>Use Backend API<input type="checkbox" id="st_useBackend"></label>
+      <label>Backend Base URL<input type="text" id="st_backendUrl" placeholder="http://localhost:8088"></label>
+    </div>
+    <div class="grid2">
+      <label>API Key (X-API-Key)
+        <input type="text" id="st_apiKey" placeholder="opsional">
+        <div class="key-actions">
+          <button type="button" id="api_generate" class="secondary">Generate</button>
+          <button type="button" id="api_regen" class="secondary">Regenerate</button>
+          <button type="button" id="api_copy" class="ghost">Copy</button>
+          <span id="api_state" class="hint">Belum ada API key</span>
+        </div>
+      </label>
+      <span></span>
+    </div>
+    <div class="grid2">
+      <label>VAPID Public Key (Push Server)
+        <input type="text" id="st_vapid" placeholder="B64 public key dari backend">
+        <span class="hint">Digunakan untuk mengaktifkan notifikasi web push dataset.</span>
+      </label>
+      <div class="key-actions push-actions">
+        <button type="button" id="push_enable" class="secondary">Aktifkan Notifikasi Dataset</button>
+        <button type="button" id="push_disable" class="ghost">Nonaktifkan</button>
+        <span id="push_state" class="hint">Belum diaktifkan</span>
+      </div>
+    </div>
+    <div class="grid2">
+      <button id="st_save">Simpan</button>
+      <a id="adminExport" class="tab-btn" href="#" role="button">Export Corpus (JSONL)</a>
+      <button id="btnHealth" class="tab-btn">Cek Backend Health</button>
+      <span id="healthInfo" class="hint"></span>
+      <button id="st_reset" class="secondary">Kembalikan Default</button>
+    </div>
+    <p class="hint">Catatan: Local-only akan menonaktifkan fitur yang memerlukan internet (ffmpeg.wasm/jsPDF/JSZip). Data anda tetap diproses lokal (IndexedDB).</p>
+  </div>
+</section>
+
+<section id="tab-help" class="tab" style="display:none">
+  <div class="panel">
+    <h3>Bantuan & FAQ</h3>
+    <p><strong>1) Bagaimana cara kerja?</strong><br>
+    Aplikasi mengekstrak jejak visual (pHash) dan opsional jejak audio (chroma) dari video. Pencarian menghitung kemiripan per detik, menampilkan timeline/heatmap, dan menghasilkan bukti.</p>
+    <p><strong>2) Apakah data saya diunggah?</strong><br>
+    Tidak. Semua pemrosesan berlangsung di perangkat anda (browser) menggunakan IndexedDB. Jika anda mengaktifkan <em>Local-only</em>, aplikasi juga menonaktifkan pemuatan library dari CDN.</p>
+    <p><strong>3) Kenapa export PDF/ZIP kadang tidak berfungsi?</strong><br>
+    Fitur tersebut memerlukan library dari CDN (jsPDF/JSZip). Saat offline atau <em>Local-only</em> aktif, tombol akan menampilkan pemberitahuan.</p>
+    <p><strong>4) Bagaimana memasang (install) sebagai Aplikasi?</strong><br>
+    Klik tombol <em>Install</em> di pojok kanan atas saat tersedia, atau gunakan menu browser “Add to Home Screen / Install App”.</p>
+  </div>
+  <div class="panel">
+    <h3>Catatan Privasi</h3>
+    <ul>
+      <li>Video/Audio yang diindeks disimpan lokal (IndexedDB). Anda dapat menghapus lewat tombol <em>Reset</em>.</li>
+      <li>Tidak ada pengiriman ke server kami. Jika mengunggah ke hosting publik, pastikan kebijakan privasi situs tersebut.</li>
+      <li>Mode <em>Local-only</em> mencegah pemuatan library eksternal.</li>
+    </ul>
+  </div>
+</section>
+
+
+<section id="tab-eval" class="tab" style="display:none">
+  <div class="panel" aria-labelledby="evalh">
+    <h3 id="evalh">Evaluasi Sistem (Precision@k, Recall@k, Latensi)</h3>
+    <p class="hint">Bangun dataset kecil dari item yang sudah diindeks. Sistem akan membuat <em>query klip</em> dari tiap item sebagai ground truth, lalu menjalankan pencarian untuk menghitung metrik.</p>
+    <div class="grid2">
+      <label>Jumlah Query per Item<input type="number" id="ev_qpi" min="1" max="5" step="1" value="2" aria-label="jumlah query per item"></label>
+      <label>Durasi Klip (detik)<input type="number" id="ev_dur" min="3" max="20" step="1" value="8" aria-label="durasi klip detik"></label>
+    </div>
+    <div class="grid2">
+      <label>k untuk Precision/Recall<input type="number" id="ev_k" min="1" max="10" step="1" value="5"></label>
+      <label>Strategi Start Klip
+        <select id="ev_strategy" aria-label="strategi start klip">
+          <option value="grid" selected>Grid (merata sepanjang video)</option>
+          <option value="random">Random</option>
+        </select>
+      </label>
+    </div>
+    <div class="grid2">
+      <button id="ev_build" aria-label="bangun dataset evaluasi">Bangun Dataset</button>
+      <button id="ev_run" class="secondary" aria-label="jalankan evaluasi">Jalankan Evaluasi</button>
+    </div>
+    <pre id="ev_log" class="mono" style="max-height:160px;overflow:auto"></pre>
+    <div class="grid2">
+      <button id="ev_export_csv" class="secondary">Export CSV</button>
+      <button id="ev_export_json" class="secondary">Export JSON</button>
+    </div>
+  </div>
+
+  <div class="panel" aria-labelledby="sumh">
+    <h3 id="sumh">Ringkasan</h3>
+    <table id="ev_summary" role="table" aria-label="Ringkasan evaluasi">
+      <thead>
+        <tr><th scope="col">Metric</th><th scope="col">Nilai</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel" aria-labelledby="advh">
+    <h3 id="advh">Analitik Lanjutan (ROC &amp; Confusion Matrix)</h3>
+    <div class="grid2">
+      <label>Threshold klasifikasi (berdasar skor pencocokan)
+        <input type="range" id="ev_thresh" min="0" max="1" step="0.01" value="0.5">
+        <span class="hint">Nilai: <strong id="ev_thresh_val">0.50</strong></span>
+      </label>
+      <div class="metric-pill" role="group" aria-label="Nilai AUC ROC">
+        <span>AUC (Area Under Curve)</span>
+        <strong id="ev_auc">-</strong>
+      </div>
+    </div>
+    <canvas id="ev_roc" height="220" aria-label="Kurva ROC" role="img" style="width:100%;background:var(--canvas-bg);border:1px solid var(--border);border-radius:12px;margin-top:12px"></canvas>
+    <table id="ev_confusion" class="mini-table" aria-label="Confusion matrix evaluasi">
+      <thead><tr><th></th><th>Aktual +</th><th>Aktual -</th></tr></thead>
+      <tbody>
+        <tr><th>Pred +</th><td id="ev_cm_tp">0</td><td id="ev_cm_fp">0</td></tr>
+        <tr><th>Pred -</th><td id="ev_cm_fn">0</td><td id="ev_cm_tn">0</td></tr>
+      </tbody>
+    </table>
+    <p class="hint" id="ev_confusion_stats">Precision/Recall akan muncul setelah evaluasi.</p>
+  </div>
+
+  <div class="panel" aria-labelledby="tblh">
+    <h3 id="tblh">Hasil per Query</h3>
+    <table id="ev_table" role="table" aria-label="Hasil evaluasi per query">
+      <thead>
+        <tr>
+          <th scope="col">#</th>
+          <th scope="col">Item GT</th>
+          <th scope="col">Start</th>
+          <th scope="col">Durasi</th>
+          <th scope="col">Top-1</th>
+          <th scope="col">Hit@k</th>
+          <th scope="col">Score@1</th>
+          <th scope="col">t_extract (ms)</th>
+          <th scope="col">t_search (ms)</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel" aria-labelledby="stgh">
+    <h3 id="stgh">Kapasitas & Storage</h3>
+    <table id="ev_storage">
+      <thead>
+        <tr><th scope="col">Item</th><th scope="col">#pHash</th><th scope="col">#Chroma</th><th scope="col">Ukuran File (MB)</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="hint">Ukuran file dihitung dari blob yang tersimpan (jika ada). pHash/chroma dari IndexedDB dihitung dari jumlah record.</p>
+  </div>
+</section>
+
+
+<section id="tab-corpus" class="tab" style="display:none">
+  <div class="panel">
+    <h3>Daftar Korpus (Backend)</h3>
+    <div class="grid2">
+      <label>Page<input type="number" id="cp_page" min="1" step="1" value="1"></label>
+      <label>Page Size<input type="number" id="cp_size" min="5" max="100" step="5" value="10"></label>
+    </div>
+    <div class="grid2">
+      <button id="cp_load">Muat</button>
+      <div class="cp-inline-actions">
+        <button id="cp_snapshot" class="secondary">Snapshot Offline</button>
+        <span id="cp_info" class="hint" aria-live="polite"></span>
+      </div>
+    </div>
+    <table id="cp_table" role="table" aria-label="Daftar korpus" aria-busy="false">
+      <thead><tr><th>#</th><th>Nama</th><th>Durasi</th><th>Bucket</th><th>Created</th><th scope="col">Aksi</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <small>MediaFinder v1.8 – Analisis video dengan pHash, audio chroma, dan late fusion.</small>
+</footer>
+
+<div id="notifyStack" class="notify-stack" aria-live="polite" aria-atomic="false"></div>
+<script type="module" src="insightEngine.js"></script>
+<div id="onboardModal" class="onboard-modal" aria-hidden="true" role="dialog" aria-labelledby="onboardTitle" aria-modal="true">
+  <div class="onboard-backdrop"></div>
+  <div class="onboard-content" role="document">
+    <button class="onboard-close" aria-label="Tutup panduan">&times;</button>
+    <div class="onboard-body">
+      <h2 id="onboardTitle">Selamat datang di MediaFinder</h2>
+      <ol class="onboard-steps">
+        <li>
+          <h3>Heatmap Kemiripan</h3>
+          <p>Lihat peta intensitas kueri vs target. Klik salah satu titik untuk lompat ke detik tertentu.</p>
+        </li>
+        <li>
+          <h3>Analisis DTW</h3>
+          <p>Gunakan Dynamic Time Warping untuk memeriksa alur kemiripan walau durasi berbeda.</p>
+        </li>
+        <li>
+          <h3>Lab Robustness</h3>
+          <p>Simulasikan degradasi video (resolusi/CRF) dan bandingkan skor hasil ekstraksi.</p>
+        </li>
+      </ol>
+      <label class="remember-choice"><input type="checkbox" id="onboardDontShow"> Jangan tampilkan lagi</label>
+      <div class="onboard-actions">
+        <button id="onboardPrev" class="secondary" disabled>Sebelumnya</button>
+        <button id="onboardNext">Selanjutnya</button>
+        <button id="onboardDone" class="primary">Mulai</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="db.js"></script>
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(console.warn);
+  });
+}
+</script>
+</body>
+</html>
+
+
+
