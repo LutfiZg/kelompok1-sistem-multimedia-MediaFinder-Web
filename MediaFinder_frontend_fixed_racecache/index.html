@@ -3,45 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MediaFinder Web — v1.8 (Functions Locked)</title>
+  <title>MediaFinder Web — v1.8</title>
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="style.css">
   <meta name="theme-color" content="#111111">
-  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/ffmpeg.min.js"></script>
 <style>.skip{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden} .skip:focus{left:8px;top:8px;width:auto;height:auto;background:#fff;color:#000;padding:8px;z-index:9999}</style>
 </head>
 <body>
 <a href="#main" id="skipLink" class="skip">Skip to content</a>
 <header>
-  <h1>MediaFinder Web — v1.8 (Functions Locked)</h1>
+  <h1>MediaFinder Web — v1.8</h1>
  <nav>
-    <button class="tab-btn" data-tab="#tab-corpus" data-i18n="nav_corpus">Korpus</button>
-    <button class="tab-btn" data-tab="#tab-eval" aria-controls="tab-eval" data-i18n="nav_eval">Evaluasi</button>
-    <button class="tab-btn" data-tab="#tab-settings" data-i18n="nav_settings">Pengaturan</button>
-    <button class="tab-btn" data-tab="#tab-help" data-i18n="nav_help">Bantuan</button>
-      <button class="tab-btn active" data-tab="#tab-indeks" data-i18n="nav_index">Indeks</button>
-      <button class="tab-btn" data-tab="#tab-pencarian" data-i18n="nav_search">Pencarian</button>
-      <button class="tab-btn" data-tab="#tab-analisis" data-i18n="nav_analysis">Analisis</button>
+    <button class="tab-btn active" data-tab="#tab-indeks" data-i18n="nav_index">Indeks</button>
+    <button class="tab-btn" data-tab="#tab-pencarian" data-i18n="nav_search">Pencarian</button>
+    <button class="tab-btn" data-tab="#tab-analisis" data-i18n="nav_analysis">Analisis</button>
+    <button class="tab-btn" data-tab="#tab-corpus" data-advanced="1" data-i18n="nav_corpus">Korpus</button>
+    <button class="tab-btn" data-tab="#tab-eval" data-advanced="1" aria-controls="tab-eval" data-i18n="nav_eval">Evaluasi</button>
+    <button class="tab-btn" data-tab="#tab-settings" data-advanced="1" data-i18n="nav_settings">Pengaturan</button>
+    <button class="tab-btn" data-tab="#tab-help" data-advanced="1" data-i18n="nav_help">Bantuan</button>
   </nav>
   <div class="header-actions">
-    <label><input type="checkbox" id="presentMode"> Mode Presentasi</label>
-    <label><input type="checkbox" id="autoHideHud" checked> Auto-hide HUD</label>
+    <span class="status-dot" id="backendIndicator" title="Mode default: lokal (backend opsional)"></span>
+    <span class="status-dot cache" id="cacheIndicator" title="Cache PWA: belum cek"></span>
     <button id="fsToggle" class="tab-btn">⛶ Full Screen</button>
     <button id="installBtn" class="tab-btn" style="display:none">⬇️ Install</button>
     <span id="verPill" class="badge">v1.8</span>
+    <button id="toggleMobileMode" class="tab-btn secondary mobile-toggle" aria-pressed="false" hidden>Mode Lengkap</button>
     <button id="themeToggle" class="tab-btn">🌗 Tema</button>
     <button id="resetBtn" class="tab-btn danger">Reset</button>
   </div>
 </header>
+<div id="backendBanner" class="alert warn" hidden>
+  <div>
+    <strong id="backendBannerTitle">Mode Lokal aktif</strong>
+    <p id="backendBannerMsg">Backend opsional. Aktifkan di Pengaturan jika ingin sinkron ke server.</p>
+  </div>
+  <div class="alert-actions">
+    <button id="bannerToSettings" class="secondary">Buka Pengaturan</button>
+    <button id="bannerGoLocal" class="ghost">Mode Lokal</button>
+  </div>
+</div>
 
 <main id="main">
   <section class="hero" aria-label="Ringkasan aplikasi">
     <div class="hero__content">
-      <span class="pill" id="textHeroPill">Media Intelligence Suite</span>
-      <h2 id="textHeroTitle">Pengindeksan & pencarian video yang presisi, cepat, dan privat.</h2>
-      <p id="textHeroDesc">MediaFinder memadukan pHash visual, fingerprint audio, dan analitik heatmap sehingga tim Anda dapat memastikan kemiripan konten hanya dalam hitungan detik.</p>
+      <span class="pill" id="textHeroPill">MediaFinder</span>
+      <h2 id="textHeroTitle">Cari kemiripan video dalam 3 langkah ringan.</h2>
+      <p id="textHeroDesc">1) Impor video referensi. 2) Unggah kueri dan klik "Cari Mirip". 3) Lihat timeline & heatmap untuk bukti. Semua diproses lokal, aman untuk pemula.</p>
       <div class="hero__actions">
         <button class="primary" data-tab-target="#tab-indeks" id="btnHeroIndex">Mulai Indeks</button>
         <button data-tab-target="#tab-pencarian" id="btnHeroSearch">Cari Kemiripan</button>
@@ -73,11 +81,26 @@
         <span id="statCTA">Gunakan tombol di samping untuk mulai</span>
       </div>
     </div>
+    <div class="quick-steps">
+      <div>
+        <div class="step-number">1</div>
+        <p><strong>Impor video referensi</strong><br>Tambahkan 1–10 berkas di tab Indeks. Simpan file asli opsional untuk preview.</p>
+      </div>
+      <div>
+        <div class="step-number">2</div>
+        <p><strong>Unggah kueri & cari</strong><br>Unggah video kueri di tab Pencarian, tekan “Cari Mirip”, lalu pilih kandidat.</p>
+      </div>
+      <div>
+        <div class="step-number">3</div>
+        <p><strong>Lihat detail</strong><br>Buka tab Analisis untuk timeline, heatmap, dan insight otomatis.</p>
+      </div>
+    </div>
   </section>
 
   <section id="tab-indeks" class="tab active">
     <div class="panel">
       <h2 id="titleImport">Impor Media</h2>
+      <p class="hint">Mulai dari sini: tambahkan video referensi (maks 10 per batch). Jika ini pertama kali, coba 1 video pendek dulu.</p>
       <input type="file" id="fileInput" accept="video/*" multiple>
       <div class="grid2">
         <label><input type="checkbox" id="saveOriginal" checked> Simpan File Asli (untuk preview) — batas ~120MB</label>
@@ -85,6 +108,13 @@
           <button id="backupBtn" class="secondary">Backup Index (JSON)</button>
           <label class="buttonlike"><input type="file" id="restoreInput" accept="application/json" style="display:none;"> Pulihkan Index</label>
         </div>
+      </div>
+      <div class="progress-bar" id="indexProgress" aria-live="polite" hidden>
+        <div class="progress-label" id="indexProgressLabel">Menyiapkan...</div>
+        <div class="progress-track">
+          <div class="progress-fill" id="indexProgressFill" style="width:0%"></div>
+        </div>
+        <div class="progress-meta" id="indexProgressMeta"></div>
       </div>
       <div class="grid2">
         <label>Metode Keyframe
@@ -119,7 +149,14 @@
   <section id="tab-pencarian" class="tab">
     <div class="panel">
       <h2 id="titleSearchUpload">Upload Kueri</h2>
+      <p class="hint">Unggah video yang ingin dicari kemiripannya. Pastikan sudah ada indeks lokal (atau backend aktif jika digunakan) agar hasil muncul.</p>
       <input type="file" id="queryInput" accept="video/*">
+      <div class="progress-bar" id="searchProgress" aria-live="polite" hidden>
+        <div class="progress-label" id="searchProgressLabel">Menyiapkan kueri...</div>
+        <div class="progress-track">
+          <div class="progress-fill" id="searchProgressFill" style="width:0%"></div>
+        </div>
+      </div>
       <div class="grid2">
         <label>Ambang Skor (0–1)<input type="number" id="threshold" min="0" max="1" step="0.01" value="0.7"></label>
         <label>Sampel fps (video)<input type="number" id="fps" min="0.25" max="2" step="0.25" value="1"></label>
@@ -215,7 +252,7 @@
         <button id="ovCenter">&#9711; Tengah</button>
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" data-advanced="1">
       <h3 id="titleAdvanced">Analisis Lanjutan (Alignment & DTW)</h3>
       <div class="grid2">
         <div>
@@ -235,15 +272,15 @@
         </div>
       </div>
     </div>
-    <h3>Top Segmen Mirip</h3>
-      <div class="grid2">
+    <h3 data-advanced="1">Top Segmen Mirip</h3>
+      <div class="grid2" data-advanced="1">
         <label>Jumlah Top-N<input type="number" id="topN" min="3" max="20" step="1" value="5"></label>
         <label>Jarak Min (detik)<input type="number" id="minSep" min="1" max="20" step="1" value="3"></label>
       </div>
-      <button id="calcTop">Hitung Top-N</button>
-      <table id="topTable"><thead><tr><th>#</th><th>t (s)</th><th>Skor</th><th scope="col">Aksi</th></tr></thead><tbody></tbody></table>
+      <button id="calcTop" data-advanced="1">Hitung Top-N</button>
+      <table id="topTable" data-advanced="1"><thead><tr><th>#</th><th>t (s)</th><th>Skor</th><th scope="col">Aksi</th></tr></thead><tbody></tbody></table>
     </div>
-    <div class="panel">
+    <div class="panel" data-advanced="1">
       <h3 id="titleSnapshot">Snapshot Bukti</h3>
       <p class="hint">Ambil frame kueri/target pada waktu Top-N untuk bukti visual.</p>
       <button id="grabShots">Ambil Snapshot</button>
@@ -260,7 +297,7 @@
       </div>
       <div id="insightList" class="insight-list" aria-live="polite"></div>
     </div>
-    <div class="panel panel-contrast">
+    <div class="panel panel-contrast" data-advanced="1">
       <h4 id="titleSim">Simulasi Transformasi pada Kueri</h4>
       <p class="hint">Jalankan ulang ekstraksi fitur pada video kueri dengan simulasi degradasi visual.</p>
       <div class="grid2">
@@ -273,6 +310,12 @@
       </div>
       <button id="reextractQuery">Re-ekstrak Kueri (Simulasi)</button>
     </div>
+    <div class="panel" data-advanced="1" id="rbActivator">
+      <h3>Lab Robustness (opsional)</h3>
+      <p class="hint">Fitur berat (ffmpeg.wasm ~25–30MB). Aktifkan hanya jika perlu menguji ketahanan terhadap kompresi/resolusi.</p>
+      <button id="rbActivate" class="secondary">Aktifkan Lab Robustness</button>
+    </div>
+    <div class="panel" data-advanced="1" id="rbPanel" style="display:none">
       <h3 id="titleRobust">Robustness (ffmpeg.wasm)</h3><button class="info-btn" data-onboard="robustness" aria-label="Apa itu lab robustness?">?</button>
       <p class="hint">Butuh internet untuk memuat ffmpeg.wasm (~25–30 MB). Gunakan cuplikan singkat agar proses lebih cepat.</p>
       <div class="grid2">
@@ -364,16 +407,18 @@
         </div>
       </div>
     </div>
+    </div>
 
-    <div class="panel">
+    <div class="panel" data-advanced="1">
       <h3>Ekspor Hasil</h3>
       <button id="exportJson">Ekspor JSON</button>
       <button id="exportCsv">Ekspor CSV</button>
       <button id="exportPdf">Export PDF</button>
+      <button id="exportPng" class="secondary">Share (PNG)</button>
     </div>
   </section>
 
-<section id="tab-settings" class="tab" style="display:none">
+<section id="tab-settings" class="tab" style="display:none" data-advanced="1">
   <div class="panel">
     <h3>Pengaturan Aplikasi</h3>
     <div class="grid2">
@@ -436,7 +481,7 @@
   </div>
 </section>
 
-<section id="tab-help" class="tab" style="display:none">
+<section id="tab-help" class="tab" style="display:none" data-advanced="1">
   <div class="panel">
     <h3>Bantuan & FAQ</h3>
     <p><strong>1) Bagaimana cara kerja?</strong><br>
@@ -459,7 +504,7 @@
 </section>
 
 
-<section id="tab-eval" class="tab" style="display:none">
+<section id="tab-eval" class="tab" style="display:none" data-advanced="1">
   <div class="panel" aria-labelledby="evalh">
     <h3 id="evalh">Evaluasi Sistem (Precision@k, Recall@k, Latensi)</h3>
     <p class="hint">Bangun dataset kecil dari item yang sudah diindeks. Sistem akan membuat <em>query klip</em> dari tiap item sebagai ground truth, lalu menjalankan pencarian untuk menghitung metrik.</p>
@@ -553,7 +598,7 @@
 </section>
 
 
-<section id="tab-corpus" class="tab" style="display:none">
+<section id="tab-corpus" class="tab" style="display:none" data-advanced="1">
   <div class="panel">
     <h3>Daftar Korpus (Backend)</h3>
     <div class="grid2">
@@ -609,6 +654,29 @@
         <button id="onboardDone" class="primary">Mulai</button>
       </div>
     </div>
+  </div>
+</div>
+
+<div id="wizardOverlay" class="wizard" aria-hidden="true" role="dialog" aria-modal="true">
+  <div class="wizard-backdrop"></div>
+  <div class="wizard-card">
+    <div class="wizard-body">
+      <p class="wizard-step" id="wizardStep">Langkah 1/3</p>
+      <h3 id="wizardTitle">Impor video referensi</h3>
+      <p id="wizardDesc">Tambahkan 1–3 video dulu di tab Indeks. Pilih file lalu klik Impor.</p>
+      <div class="wizard-actions">
+        <button type="button" id="wizardPrev" class="secondary" disabled>Sebelumnya</button>
+        <button type="button" id="wizardNext" class="primary">Selanjutnya</button>
+        <button type="button" id="wizardClose" class="ghost">Tutup</button>
+      </div>
+      <label class="remember-choice"><input type="checkbox" id="wizardDontShow"> Jangan tampilkan lagi</label>
+    </div>
+  </div>
+  <div class="wizard-highlight wizard-highlight-search" aria-hidden="true">
+    <span class="wizard-tooltip">Klik “Cari Mirip” setelah unggah kueri</span>
+  </div>
+  <div class="wizard-highlight wizard-highlight-analisis" aria-hidden="true">
+    <span class="wizard-tooltip">Buka Analisis untuk timeline & heatmap</span>
   </div>
 </div>
 

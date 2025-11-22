@@ -73,6 +73,7 @@ window.__insightFeedbackCache = window.__insightFeedbackCache || [];
 window.__insightLast = window.__insightLast || [];
 window.__lastSearchResults = window.__lastSearchResults || [];
 window.__timelineHighlights = window.__timelineHighlights || [];
+window.__wizardSkip = window.__wizardSkip || false;
 
 
 // ---- Secure Store helper (API Key encryption) ----
@@ -399,6 +400,14 @@ async function handleInsightFeedback(insight, value, card){
 // ---- Settings & Persistence ----
 // Extend Settings defaults for backend
 
+const DEFAULT_BACKEND_URL = (()=> {
+  try{
+    if(typeof window !== 'undefined' && window.location && /^https?:/i.test(window.location.protocol)){
+      return window.location.origin;
+    }
+  }catch(_){}
+  return 'http://localhost:8088';
+})();
 
 // Simple backend client
 async function apiFetch(path, opt={}){
@@ -410,7 +419,12 @@ async function apiFetch(path, opt={}){
   opt.headers = Object.assign({}, opt.headers||{}, {'Content-Type':'application/json'});
   if(s.apiKey){ opt.headers['X-API-Key'] = s.apiKey; }
   const res = await fetch(url, opt);
-  if(!res.ok){ throw new Error('API '+res.status); }
+  if(!res.ok){
+    let body = '';
+    try{ body = await res.text(); }catch(_){}
+    const msg = body ? `API ${res.status} - ${body}` : `API ${res.status}`;
+    throw new Error(msg);
+  }
   return res.json();
 }
 
@@ -494,6 +508,12 @@ async function applySettingsToUI(){
   }else{
     updatePushState(s.pushEnabled ? 'aktif' : 'off');
   }
+  const pushEnable = document.getElementById('push_enable');
+  const pushDisable = document.getElementById('push_disable');
+  const allowPush = !!s.useBackend && !!(s.backendUrl);
+  if(pushEnable) pushEnable.disabled = !allowPush;
+  if(pushDisable) pushDisable.disabled = !allowPush;
+  updateBackendBanner();
 }
 
 function updateApiKeyState(value, encrypted=false, opts={}){
@@ -605,7 +625,8 @@ async function enableBackendPush(){
   }
   const s = Settings.load();
   if(!s.useBackend){
-    alert('Aktifkan backend terlebih dahulu sebelum menyalakan notifikasi.');
+    updatePushState('off');
+    showToast?.('Push notifikasi memerlukan backend. Mode lokal tetap berjalan tanpa notifikasi.', { type:'info' });
     return;
   }
   if(!s.backendUrl){
@@ -647,8 +668,7 @@ async function enableBackendPush(){
       title:'Backend Update',
       type:'success',
       action:{ label:'Buka Korpus', handler: ()=>{
-        document.querySelector('nav .tab-btn[data-tab="#tab-corpus"]')?.click();
-        setTimeout(()=> scrollToSection(document.querySelector('#tab-corpus')), 60);
+        activateTab('#tab-corpus');
       }}
     });
   }catch(e){
@@ -728,6 +748,8 @@ document.getElementById('st_save')?.addEventListener('click', async () => {
   setThemePreference(s.themeMode || 'system', { persist:false });
   updateApiKeyState(s.apiKey, !!s.apiKeyEnc);
   updatePushState(s.pushEnabled ? 'aktif' : 'off');
+  updateBackendBanner();
+  refreshBackendStatus();
   showToast?.('Pengaturan disimpan');
 });
 
@@ -739,6 +761,7 @@ document.getElementById('st_reset')?.addEventListener('click', ()=>{
   setThemePreference('system', { persist:false });
   updateApiKeyState('', false);
   updatePushState('off');
+  refreshBackendStatus();
   showToast?.('Pengaturan dikembalikan');
 });
 
@@ -791,6 +814,87 @@ document.getElementById('themeToggle')?.addEventListener('click', ()=>{
   showToast?.(`Tema: ${label}`);
 });
 
+// ---- Status indikator (backend & cache) ----
+function setStatusDot(el, status, tooltip){
+  if(!el) return;
+  el.classList.remove('ok','warn','error','off');
+  if(status==='ok') el.classList.add('ok');
+  else if(status==='warn') el.classList.add('warn');
+  else if(status==='error') el.classList.add('error');
+  else el.classList.add('off');
+  if(tooltip) el.title = tooltip;
+}
+
+async function refreshCacheStatus(){
+  const el = document.getElementById('cacheIndicator');
+  try{
+    if(!('caches' in window)){ setStatusDot(el, 'warn', 'Cache tidak didukung'); return; }
+    const keys = await caches.keys();
+    const count = keys.filter(k=>k.startsWith('mfw-')).length;
+    setStatusDot(el, 'ok', `Cache PWA aktif (${count} entri)`);
+  }catch(_){
+    setStatusDot(el, 'warn', 'Tidak bisa membaca cache');
+  }
+}
+
+async function refreshBackendStatus(){
+  const el = document.getElementById('backendIndicator');
+  const s = Settings.load();
+  if(!s.useBackend){
+    setStatusDot(el, 'off', 'Mode lokal (backend nonaktif)');
+    return;
+  }
+  if(!s.backendUrl){
+    setStatusDot(el, 'warn', 'Backend belum diatur');
+    return;
+  }
+  try{
+    const data = await apiFetch('/api/health', { method:'GET' });
+    setStatusDot(el, "ok", "Backend OK - cache " + (data.cache_ttl||"-"));
+    // sembunyikan banner jika backend sudah sehat
+    updateBackendBanner();
+  }catch(err){
+    setStatusDot(el, 'error', 'Backend tidak bisa dijangkau');
+    console.warn('Backend health fail', err);
+  }
+}
+refreshCacheStatus();
+setTimeout(refreshBackendStatus, 200);
+
+// ---- Banner backend / mode lokal ----
+function updateBackendBanner(){
+  const banner = document.getElementById('backendBanner');
+  if(!banner) return;
+  const title = document.getElementById('backendBannerTitle');
+  const msg = document.getElementById('backendBannerMsg');
+  const s = Settings.load();
+  const missingBackend = s.useBackend && (!s.backendUrl || !s.apiKey);
+  if(missingBackend){
+    banner.hidden = false;
+    if(title) title.textContent = 'Backend belum dikonfigurasi';
+    if(msg) msg.textContent = 'Isi Backend URL dan API key di Pengaturan, atau aktifkan Mode Lokal.';
+    return;
+  }
+  if(!s.useBackend){
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = true;
+}
+updateBackendBanner();
+
+document.getElementById('bannerToSettings')?.addEventListener('click', ()=>{
+  activateTab('#tab-settings');
+});
+document.getElementById('bannerGoLocal')?.addEventListener('click', ()=>{
+  const cur = Settings.load();
+  cur.useBackend = false;
+  Settings.save(cur);
+  applySettingsToUI();
+  refreshBackendStatus();
+  showToast?.('Mode Lokal diaktifkan. Impor indeks secara lokal.', { type:'info' });
+});
+
 const I18N = { /* placeholder */ };
 const I18N_TARGETS = {}; 
 
@@ -799,7 +903,19 @@ const heroState = {
   totalHashes: 0,
   mode: 'Mode Lokal',
   lastAction: 'Menunggu aktivitas pengguna',
-  cta: 'Gunakan tombol di samping untuk mulai'
+  cta: 'Impor video atau buka indeks lokal untuk mulai'
+};
+
+// Debug panel untuk melihat log event (opsional)
+window.__dumpEvents = async (limit=50)=>{
+  try{
+    const ev = await DB.listEvents(limit);
+    console.table(ev.slice(-limit));
+    return ev;
+  }catch(e){
+    console.warn('Gagal baca event log', e);
+    return [];
+  }
 };
 function updateHeroStats(partial = {}){
   Object.assign(heroState, partial);
@@ -939,6 +1055,7 @@ function isLocalOnly(){ return !!Settings.load().localOnly; }
 
 // Reset button
 document.getElementById('resetBtn').addEventListener('click', async ()=>{
+  if(!confirm('Semua data lokal (IndexedDB, cache, SW) akan dihapus. Lanjutkan?')) return;
   try{ indexedDB.deleteDatabase('mediafinder-db'); }catch(e){}
   try{ indexedDB.deleteDatabase('mediafinder-db-v02'); }catch(e){}
   try{ indexedDB.deleteDatabase('mediafinder-db-v03reset'); }catch(e){}
@@ -1322,10 +1439,18 @@ async function extractVideoPHashesTransformed(file, fps = 1, transformOpts = {})
 fileInput.addEventListener('change', async (e)=>{
   const files = Array.from(e.target.files || []);
   if(!files.length) return;
+  DB.logEvent?.({ type:'index:start', count: files.length }).catch(()=>{});
   clearLog();
-  progress.style.display='block';
-  progress.value = 0;
+  const bar = document.getElementById('indexProgress');
+  const fill = document.getElementById('indexProgressFill');
+  const label = document.getElementById('indexProgressLabel');
+  const meta = document.getElementById('indexProgressMeta');
+  if(bar){ bar.hidden = false; }
+  if(progress){ progress.style.display='block'; progress.value = 0; }
+  const tStart = Date.now();
+  let lastEta = '';
   let done = 0;
+  let backendFailed = false;
   for(const f of files.slice(0,10)){
     log(`Mengindeks: ${f.name}`);
     try{
@@ -1338,6 +1463,11 @@ fileInput.addEventListener('change', async (e)=>{
       const histThr = Number(document.getElementById('histThrIdx')?.value)||0.12;
       const minI = Number(document.getElementById('minIntervalIdx')?.value)||0.5;
       const { duration, hashes } = await extractVideoPHashes(f, 1, { mode:kfMode, histThr, minInterval:minI });
+      const elapsed = (Date.now() - tStart)/1000;
+      const avgPerFile = elapsed / Math.max(1, done+1);
+      const remaining = Math.max(0, (files.length - (done+1)) * avgPerFile);
+      if(label){ label.textContent = `Mengindeks ${f.name}`; }
+      if(meta){ meta.textContent = `Durasi ${duration}s - ETA ${remaining.toFixed(1)} dtk`; lastEta = meta.textContent; }
       const useAudio = !!document.getElementById('useAudio')?.checked;
       let chromaSegs = [];
       if(useAudio){
@@ -1345,8 +1475,8 @@ fileInput.addEventListener('change', async (e)=>{
           const segSec = getSeg();
           const a = await extractAudioChromaFromFile(f, segSec);
           chromaSegs = a.chromaSegs||[];
-        }catch(e){
-          console.warn('audio chroma fail:', e);
+        }catch(err){
+          console.warn('audio chroma fail:', err);
           chromaSegs = [];
         }
       }
@@ -1361,9 +1491,11 @@ fileInput.addEventListener('change', async (e)=>{
           const resp = await apiFetch('/api/index/json', { method:'POST', body: JSON.stringify(payload)});
           id = resp.id;
           storedRemote = true;
-        }catch(e){
-          console.warn('backend index failed, fallback local', e);
+        }catch(err){
+          console.warn('backend index failed, fallback local', err);
+          showToast?.(`Backend gagal menyimpan ${f.name}: ${err?.message||err}. Disimpan lokal.`, { type:'warning', duration: 4000 });
           id = await DB.addItem({ name: f.name, duration }, hashes);
+          backendFailed = true;
         }
       }else{
         id = await DB.addItem({ name: f.name, duration }, hashes);
@@ -1372,25 +1504,37 @@ fileInput.addEventListener('change', async (e)=>{
         try{
           const save = document.getElementById('saveOriginal')?.checked;
           if(save && f.size <= 120*1024*1024){ await DB.addFileBlob(id, f); }
-        }catch(e){ console.warn('save file fail', e); }
+        }catch(err){
+          console.warn('save file fail', err);
+        }
         if(chromaSegs.length){
           try{
             await DB.addChroma(id, chromaSegs);
-          }catch(e){
-            console.warn('audio chroma store fail:', e);
+          }catch(err){
+            console.warn('audio chroma store fail:', err);
           }
         }
       }
-      log(`✓ Selesai ${f.name} — durasi ${duration}s, ${hashes.length} hash`);
+      log(`Selesai ${f.name} - durasi ${duration}s, ${hashes.length} hash`);
+      DB.logEvent?.({ type:'index:success', name:f.name, duration, hashes: hashes.length }).catch(()=>{});
     }catch(err){
-      console.error(err);
-      log(`✗ Gagal ${f.name}: ${err?.message||err}`);
+      log(`Gagal ${f.name}: ${err?.message||err}`);
+      DB.logEvent?.({ type:'index:error', name:f.name, message: err?.message||String(err) }).catch(()=>{});
+      backendFailed = backendFailed || Settings.load().useBackend;
     }
     done++;
-    progress.value = Math.round(done/files.length*100);
+    const pct = Math.round(done/files.length*100);
+    if(fill){ fill.style.width = `${pct}%`; }
+    if(label){ label.textContent = `Berhasil ${done}/${files.length}`; }
+    if(meta && lastEta){ meta.textContent = lastEta; }
+    if(progress){ progress.value = pct; }
   }
-  progress.style.display='none';
-  refreshTable();
+  if(bar){ bar.hidden = true; }
+  if(progress){ progress.style.display='none'; }
+  refreshTable({ preferLocal: backendFailed });
+  if(backendFailed){
+    showToast?.('Backend gagal menyimpan. Item disimpan lokal dan ditampilkan.', { type:'warning' });
+  }
   log('Selesai mengindeks semua berkas.');
   const summarySettings = Settings.load();
   updateHeroStats({
@@ -1398,13 +1542,13 @@ fileInput.addEventListener('change', async (e)=>{
     cta: summarySettings.useBackend ? 'Fingerprint terbaru telah dikirim ke backend' : 'Fingerprint tersimpan di perangkat ini'
   });
 });
-
-async function refreshTable(){
+async function refreshTable(opts={}){
   const tbody = document.querySelector('#mediaTable tbody');
   if(!tbody) return;
   tbody.innerHTML = '';
   const settings = Settings.load();
-  if(settings.useBackend){
+  const preferLocal = !!opts.preferLocal;
+  if(settings.useBackend && !preferLocal){
     try{
       const data = await apiFetch('/api/items?page=1&page_size=50', { method:'GET' });
       const items = data.items||[];
@@ -1460,6 +1604,13 @@ async function refreshTable(){
   }
   const items = await DB.listItems();
   let totalHashes = 0;
+  if(items.length === 0){
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="5">Belum ada item di indeks lokal. Impor video di atas untuk memulai.</td>';
+    tbody.appendChild(tr);
+    // tidak memunculkan wizard penuh agar UI tidak terblok; gunakan toast
+    showToast?.('Indeks kosong. Impor video di tab Indeks untuk memulai.', { type:'info' });
+  }
   for(const it of items){
     const hashes = await DB.listHashes(it.id);
     totalHashes += hashes.length;
@@ -1648,8 +1799,8 @@ function plotLine(canvas, data, color = '#4f46e5') {
     const idx = getNearest(ev.clientX);
     const pt = pts[idx];
     render(idx);
-    tooltip.textContent = `t=${pt.x.toFixed(2)} • skor=${pt.y.toFixed(3)}`;
-    if (pt.label) tooltip.textContent += ` • ${pt.label}`;
+    tooltip.textContent = `t=${pt.x.toFixed(2)} � skor=${pt.y.toFixed(3)}`;
+    if (pt.label) tooltip.textContent += ` � ${pt.label}`;
     tooltip.style.left = `${ev.clientX + 12}px`;
     tooltip.style.top = `${ev.clientY + 12}px`;
     tooltip.style.opacity = '1';
@@ -1677,14 +1828,25 @@ searchBtn.addEventListener('click', async () => {
   // === BLOK TAMBAHAN UNTUK MEMPERBAIKI VARIABEL ===
   const f = document.getElementById('queryInput')?.files?.[0];
   if (!f) { slog('Silakan unggah file kueri terlebih dahulu.'); return; }
+  DB.logEvent?.({ type:'search:start', name:f.name }).catch(()=>{});
   window.__lastQueryFile = f;
   const fps = getFps();
   const segSec = getSeg();
+  const kfMode = document.getElementById('kfModeQ')?.value || 'hybrid';
+  const histThr = Number(document.getElementById('histThr')?.value) || 0.12;
+  const minInterval = Number(document.getElementById('minInterval')?.value) || 0.5;
+  const threshold = Number(document.getElementById('threshold')?.value) || 0;
+  const bar = document.getElementById('searchProgress');
+  const fill = document.getElementById('searchProgressFill');
+  const label = document.getElementById('searchProgressLabel');
+  if(bar){ bar.hidden = false; if(fill) fill.style.width = '10%'; if(label) label.textContent = 'Menyiapkan kueri...'; }
   sclr();
   slog(`Mengekstrak fitur dari: ${f.name}`);
   // === AKHIR BLOK TAMBAHAN ===
 
-  const q = await extractVideoPHashes(f, fps, {});
+  const q = await extractVideoPHashes(f, fps, { mode:kfMode, histThr, minInterval });
+  if(fill) fill.style.width = '40%';
+  if(label) label.textContent = 'Ekstraksi audio (opsional)...';
 
   try {
     const useAudio = document.getElementById('useAudio')?.checked;
@@ -1696,7 +1858,7 @@ searchBtn.addEventListener('click', async () => {
     }
     q._segSec = segSec;
   } catch (e) {
-    // opsional: log agar tidak “kosong”
+    // opsional: log agar tidak �kosong�
     console.error(e);
     slog(`Gagal ekstrak audio: ${e.message}`);
     q._chromaSegs = [];
@@ -1710,6 +1872,8 @@ searchBtn.addEventListener('click', async () => {
   if (settings.useBackend) {
     // --- MODE BACKEND ---
     slog('Mencari menggunakan backend...');
+    if(fill) fill.style.width = '65%';
+    if(label) label.textContent = 'Mengirim kueri ke backend...';
     try {
       const payload = {
         hashes: q.hashes.map(h => h.hash),
@@ -1726,6 +1890,8 @@ searchBtn.addEventListener('click', async () => {
         method: 'POST',
         body: JSON.stringify(payload)
       });
+      if(fill) fill.style.width = '90%';
+      if(label) label.textContent = 'Menggabungkan kandidat...';
 
       const formattedResults = (response.results || []).map(res => ({
         item: { id: res.id, name: res.name, source: 'backend' },
@@ -1735,6 +1901,7 @@ searchBtn.addEventListener('click', async () => {
 
       renderResults(formattedResults);
       slog(`Backend menemukan ${formattedResults.length} kandidat.`);
+      DB.logEvent?.({ type:'search:backend', results: formattedResults.length, threshold }).catch(()=>{});
       updateHeroStats({
         lastAction: `Pencarian backend: ${formattedResults.length} kandidat`,
         cta: formattedResults.length ? 'Klik Analisis untuk melihat detail per segmen' : 'Coba ubah parameter atau indeks lain'
@@ -1746,11 +1913,25 @@ searchBtn.addEventListener('click', async () => {
         lastAction: 'Pencarian backend gagal',
         cta: 'Periksa log atau tab health backend'
       });
+      DB.logEvent?.({ type:'search:backend_error', message: e?.message||String(e) }).catch(()=>{});
+      if(bar){ bar.hidden = true; }
+      return;
     }
 
   } else {
     // --- MODE LOKAL (CLIENT-SIDE) ---
+    const existing = await DB.listItems();
+    if(existing.length === 0){
+      slog('Indeks lokal kosong. Impor video di tab Indeks lebih dulu.');
+      document.querySelector('nav .tab-btn[data-tab="#tab-indeks"]')?.click();
+      showToast?.('Indeks lokal kosong. Impor video di tab Indeks lebih dulu.', { type:'info' });
+      if(bar){ bar.hidden = true; }
+      DB.logEvent?.({ type:'search:no_index' }).catch(()=>{});
+      return;
+    }
     slog('Mencari secara lokal di browser...');
+    if(fill) fill.style.width = '65%';
+    if(label) label.textContent = 'Menghitung kandidat lokal...';
     const items = await DB.listItems();
     const scores = [];
     const wv = getWV();
@@ -1772,13 +1953,18 @@ searchBtn.addEventListener('click', async () => {
     }
 
     scores.sort((a, b) => b.score - a.score);
-    renderResults(scores.slice(0, 10));
-    slog('Pencarian lokal selesai.');
+    const top = scores.slice(0, 10);
+    renderResults(top);
+    slog(`Pencarian lokal selesai. ${top.length} kandidat teratas ditampilkan.`);
+    DB.logEvent?.({ type:'search:local', results: top.length, total: scores.length, threshold }).catch(()=>{});
     updateHeroStats({
       lastAction: `Pencarian lokal: ${Math.min(10, scores.length)} kandidat teratas`,
       cta: scores.length ? 'Pilih salah satu hasil lalu buka tab Analisis' : 'Impor korpus terlebih dahulu'
     });
   }
+  if(bar){ bar.hidden = true; }
+  if(fill) fill.style.width = '100%';
+  if(label) label.textContent = 'Selesai';
 });
 
 
@@ -1808,15 +1994,30 @@ function renderResults(list){
     };
   });
   window.__lastSearchResults = normalized;
+  if(safeList.length === 0){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="3">Belum ada hasil. Unggah kueri lalu klik "Cari Mirip".</td>`;
+    resultBody.appendChild(tr);
+    return;
+  }
   safeList.forEach(row => {
     const source = row.item?.source || (row.backend ? 'backend' : 'local');
     const itemName = row.item?.name || `Item ${row.item?.id ?? ''}`;
     const itemId = row.item?.id ?? '';
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${itemName}</td><td>${Number(row.score||0).toFixed(3)}</td>
-      <td><button data-analyze="${itemId}">Analisis</button></td>`;
-    const btn = tr.querySelector('button[data-analyze]');
-    if(btn){ btn.setAttribute('data-source', source); }
+    const tdName = document.createElement('td');
+    tdName.textContent = itemName;
+    const tdScore = document.createElement('td');
+    tdScore.textContent = Number(row.score||0).toFixed(3);
+    const tdAction = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.dataset.analyze = itemId;
+    btn.textContent = 'Analisis';
+    btn.setAttribute('data-source', source);
+    tdAction.appendChild(btn);
+    tr.appendChild(tdName);
+    tr.appendChild(tdScore);
+    tr.appendChild(tdAction);
     resultBody.appendChild(tr);
   });
   resultBody.querySelectorAll('button[data-analyze]').forEach(btn=>{
@@ -1966,7 +2167,7 @@ async function drawTimeline(q, t){
     const a = BigInt('0x' + q.hashes[i].hash);
     const b = BigInt('0x' + t.hashes[i].hash);
     const h = hamming64(a, b);
-    vis[i] = 1 - (Number(h) / 64.0); // ← perbaikan: 64, bukan 63
+    vis[i] = 1 - (Number(h) / 64.0); // ? perbaikan: 64, bukan 63
   }
 
   const wv = getWV();
@@ -2028,7 +2229,7 @@ async function drawTimeline(q, t){
       try { playerT.currentTime = tT; playerT.play(); } catch (_) { }
       if (typeof showToast === 'function') showToast(`Jump ke Q=${tQ}s, T=${tT}s`);
     };
-  } // ← cukup satu penutup untuk if(heat)
+  } // ? cukup satu penutup untuk if(heat)
 
   canvas.onclick = (ev) => {
     const rect = canvas.getBoundingClientRect();
@@ -2233,9 +2434,32 @@ document.getElementById('exportCsv')?.addEventListener('click', ()=>{
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mediafinder_report.csv'; a.click();
 });
 
+// Share ringkas: PNG snapshot tab Analisis
+document.getElementById('exportPng')?.addEventListener('click', async ()=>{
+  try{
+    const section = document.querySelector('#tab-analisis');
+    if(!section){ alert('Tab Analisis belum dibuka.'); return; }
+    activateTab('#tab-analisis');
+    const { default: html2canvas } = await import('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.esm.js');
+    const canvas = await html2canvas(section, { scale: 1, useCORS:true, backgroundColor:'#0b1220' });
+    canvas.toBlob((blob)=>{
+      if(!blob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'mediafinder_summary.png';
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 1200);
+    }, 'image/png', 0.92);
+  }catch(e){
+    console.error(e);
+    alert('Gagal membuat PNG: '+(e?.message||e));
+  }
+});
+
+// Share ringkas: JSON minimal
+
 // Default tab
-document.querySelector('nav .tab-btn[data-tab="#tab-indeks"]')?.classList.add('active');
-document.getElementById('tab-indeks')?.classList.add('active');
+activateTab('#tab-indeks', { scroll:false });
 
 
 function slidingAlignment(fusedQ, fusedT, maxShift=15, winSec=30){
@@ -2373,7 +2597,7 @@ document.getElementById('runDTW')?.addEventListener('click', ()=>{
   const w = Number(document.getElementById('dtwBand').value)||10;
   const res = dtwBand(a,b,w);
   const sim = 1 - Math.min(1, Math.max(0, res.normCost)); // approx sim
-  document.getElementById('dtwInfo').textContent = `DTW-Lite: path=${res.path.length}, skor≈${sim.toFixed(3)}`;
+  document.getElementById('dtwInfo').textContent = `DTW-Lite: path=${res.path.length}, skor�${sim.toFixed(3)}`;
   // plot mapping i->j
   const map = new Array(res.path.length).fill(0).map((_,k)=>res.path[k][1]-res.path[k][0]);
   plotLine(document.getElementById('dtwPlot'), map, '#2e7d32');
@@ -2383,15 +2607,18 @@ document.getElementById('runDTW')?.addEventListener('click', ()=>{
 document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
   try{
     if(isLocalOnly()){ alert('Mode Local-only aktif. Export PDF dinonaktifkan.'); return; }
-    if(!window.jspdf || !window.jspdf.jsPDF){ alert('jsPDF belum termuat (butuh internet).'); return; }
-    const { jsPDF } = window.jspdf;
+    const js = window.jspdf ? window.jspdf : (await loadJsPDF().catch(()=>null));
+    const { jsPDF } = js || window.jspdf || {};
+    if(!jsPDF){ alert('jsPDF belum termuat (butuh internet).'); return; }
     const doc = new jsPDF({unit:'pt', format:'a4'});
-    const PAD = 44;
+    doc.setLineHeightFactor(1.3);
+    const PAD = 48;
     const LINE = 18;
     const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
     const contentWidth = pageW - PAD * 2;
     let y = PAD;
-    const limitY = doc.internal.pageSize.getHeight() - PAD;
+    const limitY = pageH - PAD - 24;
     const palette = {
       text: [16,24,39],
       muted: [76,85,104],
@@ -2431,7 +2658,7 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
       doc.setDrawColor(...palette.accent);
       doc.setLineWidth(1);
       doc.line(PAD, y, PAD + Math.min(180, contentWidth), y);
-      y += LINE * 0.2;
+      y += LINE * 0.8;
       doc.setLineWidth(0.2);
     };
     const drawCardGrid = (items, columns=2)=>{
@@ -2538,7 +2765,7 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
         const blockH = body.length * 12;
         ensureSpace(blockH + 6);
         body.forEach((line, idx)=>{
-          const prefix = idx===0 ? '•' : ' ';
+          const prefix = idx===0 ? '�' : ' ';
           doc.text(`${prefix} ${line}`, PAD, y + idx * 12);
         });
         y += blockH + 6;
@@ -2564,7 +2791,7 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
     const tHashes = lastTargetData?.hashes?.length || lastTargetData?.hashCount || 0;
     const shots = window.__shots || [];
     const highCandidates = (window.__lastSearchResults || []).filter(r=> Number(r.score) >= 0.7).length;
-    const title = document.title || 'MediaFinder – Laporan Analisis';
+    const title = document.title || 'MediaFinder � Laporan Analisis';
     drawHeroHeader(title, `Dibuat: ${new Date().toLocaleString()}`);
     drawSection('Ringkasan Eksekutif', 'Detail input kueri dan target yang dianalisis.');
     drawCardGrid([
@@ -2641,7 +2868,7 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
       if(globalScore >= 0.8){
         notes.push('Skor global di atas 0.80 menunjukkan kecocokan yang sangat kuat antara kueri dan target.');
       }else if(globalScore <= 0.4){
-        notes.push('Skor global di bawah 0.40 – kemungkinan kecocokan rendah, verifikasi ulang kandidat lain.');
+        notes.push('Skor global di bawah 0.40 � kemungkinan kecocokan rendah, verifikasi ulang kandidat lain.');
       }
       if(stdDev <= 0.05){
         notes.push('Variasi skor timeline rendah; pola kemiripan relatif stabil di sepanjang durasi.');
@@ -2680,6 +2907,13 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
         { title:'Judul', width:180 },
         { title:'Ringkasan', width: contentWidth - 310 }
       ], rows);
+    }
+    const totalPages = doc.getNumberOfPages();
+    for(let p=1; p<=totalPages; p++){
+      doc.setPage(p);
+      doc.setFontSize(9);
+      doc.setTextColor(120,130,150);
+      doc.text(`Hal ${p} / ${totalPages}`, doc.internal.pageSize.getWidth() - PAD - 40, doc.internal.pageSize.getHeight() - 18);
     }
     doc.save('mediafinder_report.pdf');
   }catch(e){
@@ -2728,7 +2962,7 @@ function renderHighlightList(){
     const label = document.createElement('strong');
     label.textContent = hl.label || `Highlight ${idx+1}`;
     const span = document.createElement('span');
-    span.textContent = `${formatDuration(hl.startSec,{compact:true,withUnit:false})} – ${formatDuration(hl.endSec,{compact:true,withUnit:false})}`;
+    span.textContent = `${formatDuration(hl.startSec,{compact:true,withUnit:false})} � ${formatDuration(hl.endSec,{compact:true,withUnit:false})}`;
     title.appendChild(label);
     title.appendChild(span);
     const actions = document.createElement('div');
@@ -2765,7 +2999,7 @@ function drawHighlightOverlay(){
     const widthPct = Math.max(1.5, ((endIdx - startIdx) / totalSamples) * 100);
     block.style.left = `${startPct}%`;
     block.style.width = `${widthPct}%`;
-    block.title = `${hl.label || `Highlight ${idx+1}`} (${formatDuration(hl.startSec,{compact:true,withUnit:false})} – ${formatDuration(hl.endSec,{compact:true,withUnit:false})})`;
+    block.title = `${hl.label || `Highlight ${idx+1}`} (${formatDuration(hl.startSec,{compact:true,withUnit:false})} � ${formatDuration(hl.endSec,{compact:true,withUnit:false})})`;
     block.addEventListener('click', (ev)=>{
       ev.stopPropagation();
       jumpToTime(hl.startSec);
@@ -2911,22 +3145,25 @@ document.getElementById('grabShots')?.addEventListener('click', async ()=>{
 document.getElementById('downloadShots')?.addEventListener('click', async ()=>{
   const shots = window.__shots || [];
   if(shots.length===0){ alert('Belum ada snapshot.'); return; }
-  if(window.JSZip){
-    const zip = new JSZip();
-    shots.forEach((s,i)=>{
-      const q = s.query.split(',')[1]; zip.file(`shot_${i+1}_t${s.t}_query.jpg`, q, {base64:true});
-      if(s.target){ const t = s.target.split(',')[1]; zip.file(`shot_${i+1}_t${s.t}_target.jpg`, t, {base64:true}); }
-    });
-    const blob = await zip.generateAsync({type:'blob'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mediafinder_shots.zip'; a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href), 1500);
-  }else{
-    // fallback: download one by one
-    shots.forEach((s,i)=>{
-      const a = document.createElement('a'); a.href = s.query; a.download = `shot_${i+1}_t${s.t}_query.jpg`; a.click();
-      if(s.target){ const b = document.createElement('a'); b.href = s.target; b.download = `shot_${i+1}_t${s.t}_target.jpg`; b.click(); }
-    });
-  }
+  try{
+    const JSZipLib = window.JSZip || await loadJSZip().catch(()=>null);
+    if(JSZipLib){
+      const zip = new JSZipLib();
+      shots.forEach((s,i)=>{
+        const q = s.query.split(',')[1]; zip.file(`shot_${i+1}_t${s.t}_query.jpg`, q, {base64:true});
+        if(s.target){ const t = s.target.split(',')[1]; zip.file(`shot_${i+1}_t${s.t}_target.jpg`, t, {base64:true}); }
+      });
+      const blob = await zip.generateAsync({type:'blob'});
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'mediafinder_shots.zip'; a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href), 1500);
+      return;
+    }
+  }catch(_){}
+  // fallback: download one by one
+  shots.forEach((s,i)=>{
+    const a = document.createElement('a'); a.href = s.query; a.download = `shot_${i+1}_t${s.t}_query.jpg`; a.click();
+    if(s.target){ const b = document.createElement('a'); b.href = s.target; b.download = `shot_${i+1}_t${s.t}_target.jpg`; b.click(); }
+  });
 });
 
 
@@ -2943,10 +3180,19 @@ window.__rbHistory = window.__rbHistory || [];
 async function loadFF(){ 
   if(__ff) return __ff;
   if(isLocalOnly()){ alert('Mode Local-only aktif. Robustness (ffmpeg) dinonaktifkan.'); throw new Error('local-only'); }
-  if(!window.FFmpeg || !window.FFmpeg.createFFmpeg){ alert('ffmpeg.wasm tidak tersedia. Pastikan koneksi internet.'); throw new Error('ffmpeg not available'); }
+  if(!window.FFmpeg || !window.FFmpeg.createFFmpeg){
+    await new Promise((resolve, reject)=>{
+      const s = document.createElement('script');
+      s.src = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/ffmpeg.min.js';
+      s.onload = ()=> resolve();
+      s.onerror = ()=> reject(new Error('ffmpeg.wasm tidak tersedia. Pastikan koneksi internet.'));
+      document.head.appendChild(s);
+    });
+  }
+  if(!window.FFmpeg || !window.FFmpeg.createFFmpeg){ throw new Error('ffmpeg.wasm tidak tersedia.'); }
   const corePath = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/ffmpeg-core.js';
   __ff = window.FFmpeg.createFFmpeg({ log: true, corePath });
-  slog('Memuat ffmpeg.wasm ... (~25–30MB)'); await __ff.load(); slog('ffmpeg.wasm siap.');
+  slog('Memuat ffmpeg.wasm ... (~25�30MB)'); await __ff.load(); slog('ffmpeg.wasm siap.');
   return __ff;
 }
 function rbLog(msg){ const el = document.getElementById('rbLog'); if(!el) return; el.textContent += (msg+'\\n'); el.scrollTop = el.scrollHeight; }
@@ -3442,7 +3688,7 @@ document.getElementById('rbExportPdf')?.addEventListener('click', async () => {
         const pad = 40, line = 18;
         let y = pad;
 
-        doc.setFontSize(14); doc.text('MediaFinder — Laporan Robustness', pad, y); y += line;
+        doc.setFontSize(14); doc.text('MediaFinder � Laporan Robustness', pad, y); y += line;
         doc.setFontSize(10); doc.text('Dibuat: ' + new Date().toLocaleString(), pad, y); y += line * 1.5;
 
         const robustnessPanel = document.getElementById('rbChart')?.closest('.panel');
@@ -3523,8 +3769,7 @@ if('serviceWorker' in navigator){
         action:{
           label:'Muat Korpus',
           handler: ()=>{
-            document.querySelector('nav .tab-btn[data-tab="#tab-corpus"]')?.click();
-            setTimeout(()=> scrollToSection(document.querySelector('#tab-corpus')), 60);
+            activateTab('#tab-corpus');
             document.getElementById('cp_load')?.click();
           }
         }
@@ -3542,43 +3787,172 @@ function scrollToSection(el){
   window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
 }
 
-document.querySelectorAll('nav .tab-btn[data-tab]')?.forEach(btn => {
-  btn.addEventListener('click', (e) => {
-    const targetSelector = e.currentTarget.getAttribute('data-tab');
-
-    // Sembunyikan semua tab
-    document.querySelectorAll('main .tab').forEach(tab => {
-      tab.style.display = 'none';
-      tab.classList.remove('active');
-    });
-
-    // Hapus status aktif dari semua tombol
-    document.querySelectorAll('nav .tab-btn').forEach(b => {
-      b.classList.remove('active');
-    });
-
-  // Tampilkan tab yang dituju dan aktifkan tombolnya
+function activateTab(targetSelector, opts={}){
+  if(!targetSelector) return;
   const targetTab = document.querySelector(targetSelector);
-  if (targetTab) {
-    targetTab.style.display = 'block';
-    targetTab.classList.add('active');
-    e.currentTarget.classList.add('active');
+  if(!targetTab) return;
+  document.querySelectorAll('main .tab').forEach(tab => {
+    tab.style.display = 'none';
+    tab.classList.remove('active');
+  });
+  document.querySelectorAll('nav .tab-btn').forEach(b => {
+    b.classList.remove('active');
+  });
+  targetTab.style.display = 'block';
+  targetTab.classList.add('active');
+  const navBtn = document.querySelector(`nav .tab-btn[data-tab="${targetSelector}"]`);
+  navBtn?.classList.add('active');
+  if(opts.scroll !== false){
     setTimeout(()=> scrollToSection(targetTab), 40);
   }
+}
+
+document.querySelectorAll('nav .tab-btn[data-tab]')?.forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    const targetSelector = e.currentTarget.getAttribute('data-tab');
+    activateTab(targetSelector);
+  });
 });
+
+const SIMPLE_BREAKPOINT = '(max-width: 900px)';
+const FORCE_FULL_KEY = 'mf_force_full_mobile';
+function refreshMobileToggleUI(){
+  const btn = document.getElementById('toggleMobileMode');
+  if(!btn) return;
+  const mobile = window.matchMedia(SIMPLE_BREAKPOINT).matches;
+  const forceFull = localStorage.getItem(FORCE_FULL_KEY) === '1';
+  if(!mobile){
+    btn.hidden = true;
+    btn.setAttribute('aria-pressed','false');
+    return;
+  }
+  btn.hidden = false;
+  btn.textContent = forceFull ? 'Mode Ringkas' : 'Mode Lengkap';
+  btn.title = forceFull ? 'Kembali ke tampilan ringkas' : 'Tampilkan fitur lengkap di layar kecil';
+  btn.setAttribute('aria-pressed', forceFull ? 'true' : 'false');
+}
+function enforceSimpleMode(){
+  const mq = window.matchMedia(SIMPLE_BREAKPOINT);
+  const mobile = mq.matches;
+  const forceFull = localStorage.getItem(FORCE_FULL_KEY) === '1';
+  const useSimple = mobile && !forceFull;
+  document.body.classList.toggle('mobile-simple', useSimple);
+  refreshMobileToggleUI();
+  if(useSimple){
+    const active = document.querySelector('nav .tab-btn.active');
+    if(active?.dataset.advanced){
+      document.querySelector('nav .tab-btn[data-tab="#tab-indeks"]')?.click();
+    }
+  }
+}
+enforceSimpleMode();
+window.matchMedia(SIMPLE_BREAKPOINT).addEventListener('change', enforceSimpleMode);
+document.getElementById('toggleMobileMode')?.addEventListener('click', ()=>{
+  const forceFull = localStorage.getItem(FORCE_FULL_KEY) === '1';
+  localStorage.setItem(FORCE_FULL_KEY, forceFull ? '0' : '1');
+  enforceSimpleMode();
+  showToast?.(forceFull ? 'Mode ringkas diaktifkan.' : 'Mode lengkap diaktifkan untuk layar kecil.', { type:'info' });
 });
 
 document.querySelectorAll('[data-tab-target]')?.forEach(btn=>{
   btn.addEventListener('click', (e)=>{
     const targetSelector = e.currentTarget.getAttribute('data-tab-target');
     if(!targetSelector) return;
-    const navBtn = document.querySelector(`nav .tab-btn[data-tab="${targetSelector}"]`);
-    navBtn?.click();
-    const target = document.querySelector(targetSelector);
-    if(target){ setTimeout(()=> scrollToSection(target), 40); }
+    activateTab(targetSelector);
   });
 });
 
+// ---- Wizard onboarding (3 langkah) ----
+const wizardSteps = [
+  { title:'Impor video referensi', desc:'Tambahkan 1�3 video dulu di tab Indeks. Pilih file lalu klik Impor.', highlight:null },
+  { title:'Unggah kueri & klik "Cari Mirip"', desc:'Buka tab Pencarian, unggah 1 video kueri, lalu tekan tombol Cari Mirip.', highlight:'.wizard-highlight-search' },
+  { title:'Lihat hasil di Analisis', desc:'Pilih salah satu kandidat, lalu buka tab Analisis untuk timeline & heatmap.', highlight:'.wizard-highlight-analisis' }
+];
+let wizardIndex = 0;
+function showWizard(idx=0){
+  if(window.__wizardSkip) return;
+  wizardIndex = Math.max(0, Math.min(idx, wizardSteps.length-1));
+  const modal = document.getElementById('wizardOverlay');
+  if(!modal) return;
+  modal.setAttribute('aria-hidden','false');
+  renderWizard();
+  positionHighlights();
+}
+function hideWizard(remember=false){
+  const modal = document.getElementById('wizardOverlay');
+  modal?.setAttribute('aria-hidden','true');
+  document.querySelectorAll('.wizard-highlight').forEach(el=> el.classList.remove('wizard-highlight-show'));
+  if(remember){
+    window.__wizardSkip = true;
+    localStorage.setItem('mf_wizard_skip','1');
+  }
+}
+function renderWizard(){
+  const step = wizardSteps[wizardIndex];
+  const stepEl = document.getElementById('wizardStep');
+  const titleEl = document.getElementById('wizardTitle');
+  const descEl = document.getElementById('wizardDesc');
+  if(stepEl) stepEl.textContent = `Langkah ${wizardIndex+1}/${wizardSteps.length}`;
+  if(titleEl) titleEl.textContent = step.title;
+  if(descEl) descEl.textContent = step.desc;
+  const prevBtn = document.getElementById('wizardPrev');
+  if(prevBtn) prevBtn.disabled = (wizardIndex === 0);
+  const nextBtn = document.getElementById('wizardNext');
+  if(nextBtn) nextBtn.textContent = wizardIndex === wizardSteps.length-1 ? 'Selesai' : 'Selanjutnya';
+  document.querySelectorAll('.wizard-highlight').forEach(el=> el.classList.remove('wizard-highlight-show'));
+  if(step.highlight){
+    const el = document.querySelector(step.highlight);
+    if(el) el.classList.add('wizard-highlight-show');
+  }
+}
+function positionHighlights(){
+  const searchBtn = document.getElementById('searchBtn');
+  const analisisTab = document.querySelector('nav .tab-btn[data-tab="#tab-analisis"]');
+  const searchHighlight = document.querySelector('.wizard-highlight-search');
+  const analisisHighlight = document.querySelector('.wizard-highlight-analisis');
+  const offset = document.querySelector('header')?.getBoundingClientRect().height || 0;
+  if(searchBtn && searchHighlight){
+    const rect = searchBtn.getBoundingClientRect();
+    searchHighlight.style.top = `${rect.top + window.scrollY - offset - 8}px`;
+    searchHighlight.style.left = `${rect.left + window.scrollX - 8}px`;
+    searchHighlight.style.width = `${rect.width + 16}px`;
+    searchHighlight.style.height = `${rect.height + 16}px`;
+  }
+  if(analisisTab && analisisHighlight){
+    const rect = analisisTab.getBoundingClientRect();
+    analisisHighlight.style.top = `${rect.top + window.scrollY - offset - 8}px`;
+    analisisHighlight.style.left = `${rect.left + window.scrollX - 8}px`;
+    analisisHighlight.style.width = `${rect.width + 16}px`;
+    analisisHighlight.style.height = `${rect.height + 16}px`;
+  }
+}
+window.addEventListener('resize', positionHighlights);
+document.getElementById('wizardPrev')?.addEventListener('click', ()=>{
+  if(wizardIndex>0){ wizardIndex--; renderWizard(); positionHighlights(); }
+});
+document.getElementById('wizardNext')?.addEventListener('click', ()=>{
+  if(wizardIndex < wizardSteps.length-1){ wizardIndex++; renderWizard(); positionHighlights(); }
+  else { hideWizard(document.getElementById('wizardDontShow')?.checked); }
+});
+document.getElementById('wizardClose')?.addEventListener('click', ()=>{
+  hideWizard(document.getElementById('wizardDontShow')?.checked);
+});
+
+// Tampilkan wizard saat indeks kosong atau hasil pencarian kosong
+function maybeShowWizard(){ 
+  if(localStorage.getItem('mf_wizard_skip')==='1'){ window.__wizardSkip=true; return; }
+}
+maybeShowWizard();
+
+// ---- Lazy load Lab Robustness UI ----
+document.getElementById('rbActivate')?.addEventListener('click', ()=>{
+  const panel = document.getElementById('rbPanel');
+  const activator = document.getElementById('rbActivator');
+  if(panel){ panel.style.display='block'; }
+  if(activator){ activator.style.display='none'; }
+  scrollToSection(panel);
+});
 
 // ---- Evaluation (Sprint D) ----
 async function ev_listCorpus(){
@@ -4032,13 +4406,6 @@ document.getElementById('recomputeHM')?.addEventListener('click', async ()=>{
 
 
 
-// ---- Present mode ----
-document.getElementById('presentMode')?.addEventListener('change', (e)=>{
-  document.body.classList.toggle('present', !!e.target.checked);
-});
-
-
-
 // ---- Korpus tab (backend required) ----
 function setCorpusLoading(isLoading, message){
   const table = document.getElementById('cp_table');
@@ -4050,7 +4417,16 @@ function setCorpusLoading(isLoading, message){
   }
 }
 async function loadCorpus(){
-  const s = Settings.load(); if(!s.useBackend){ alert('Aktifkan backend terlebih dahulu.'); return; }
+  const s = Settings.load();
+  if(!s.useBackend){
+    const info = document.getElementById('cp_info');
+    if(info) info.textContent = 'Mode lokal aktif. Aktifkan backend di Pengaturan untuk memuat korpus server.';
+    const tb = document.querySelector('#cp_table tbody');
+    if(tb){
+      tb.innerHTML = '<tr class="loading-row"><td colspan="6">Korpus backend hanya tersedia saat backend aktif.</td></tr>';
+    }
+    return;
+  }
   const page = Number(document.getElementById('cp_page').value)||1;
   const size = Number(document.getElementById('cp_size').value)||10;
   const url = `/api/items?page=${page}&page_size=${size}`;
@@ -4125,65 +4501,31 @@ async function computeFusedTimelineWorker(q, t, wv, wa){
 
 
 // ---- Presentasi+ UX ----
-(function(){
-  let hideTimer=null;
-  function scheduleHide(){
-    if(!document.body.classList.contains('present')) return;
-    if(!document.getElementById('autoHideHud')?.checked) return;
-    document.body.classList.add('autohide');
-    if(hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(()=>{
-      document.body.classList.add('autohide');
-    }, 1500);
-  }
-  function showHUD(){
-    document.body.classList.remove('autohide');
-    if(hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(()=>{
-      if(document.getElementById('autoHideHud')?.checked){
-        document.body.classList.add('autohide');
-      }
-    }, 3000);
-  }
-  window.addEventListener('mousemove', showHUD);
-  window.addEventListener('keydown', showHUD);
-  document.getElementById('autoHideHud')?.addEventListener('change', ()=>{
-    if(!document.getElementById('autoHideHud').checked){ document.body.classList.remove('autohide'); }
-  });
-  // Hotkeys
-  window.addEventListener('keydown', (e)=>{
-    if(e.target && (e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')) return;
-    if(e.key.toLowerCase()==='p'){ const c = document.getElementById('presentMode'); if(c){ c.checked = !c.checked; c.dispatchEvent(new Event('change')); } }
-    if(e.key.toLowerCase()==='f'){ document.getElementById('fsToggle')?.click(); }
-  });
-  // Fullscreen toggle
-  document.getElementById('fsToggle')?.addEventListener('click', ()=>{
-    const el = document.documentElement;
-    if(!document.fullscreenElement){ el.requestFullscreen?.(); } else { document.exitFullscreen?.(); }
-  });
-  // Overlay controls
-  const ov = document.getElementById('presentOverlay');
-  document.getElementById('ovPlayQ')?.addEventListener('click', ()=>{ try{ playerQ.play(); }catch(_){ } });
-  document.getElementById('ovPlayT')?.addEventListener('click', ()=>{ try{ playerT.play(); }catch(_){ } });
-  document.getElementById('ovPause')?.addEventListener('click', ()=>{ try{ playerQ.pause(); playerT.pause(); }catch(_){ } });
-  document.getElementById('ovCenter')?.addEventListener('click', ()=>{
-    const info = window.__heatmapInfo; if(!info) return;
-    const tQ = Math.floor((info.lenQ||0)/2), tT = Math.floor((info.lenT||0)/2);
-    try{ playerQ.currentTime=tQ; }catch(_){ } try{ playerT.currentTime=tT; }catch(_){ }
-  });
-})();
+document.getElementById('fsToggle')?.addEventListener('click', ()=>{
+  const el = document.documentElement;
+  if(!document.fullscreenElement){ el.requestFullscreen?.(); } else { document.exitFullscreen?.(); }
+});
 
 
 
 // ---- Backend Health checker ----
 document.getElementById('btnHealth')?.addEventListener('click', async ()=>{
+  const s = Settings.load();
+  if(!s.useBackend){
+    document.getElementById('healthInfo').textContent = 'Mode lokal: backend dimatikan';
+    setStatusDot(document.getElementById('backendIndicator'), 'off', 'Mode lokal (backend nonaktif)');
+    showToast?.('Mode lokal aktif, tidak perlu cek backend.', { type:'info' });
+    return;
+  }
   try{
     const data = await apiFetch('/api/health', {method:'GET'});
-    const txt = `OK · DB=${data.db||'-'} · cache=${data.cache_ttl||'-'}`;
+    const txt = `OK � cache=${data.cache_ttl||'-'}`;
     document.getElementById('healthInfo').textContent = txt;
+    setStatusDot(document.getElementById('backendIndicator'), 'ok', txt);
     showToast?.('Backend sehat');
   }catch(e){
     document.getElementById('healthInfo').textContent = 'Tidak dapat menghubungi backend';
+    setStatusDot(document.getElementById('backendIndicator'), 'error', 'Backend tidak dapat dihubungi');
     alert('Gagal health: '+(e?.message||e));
   }
 });
@@ -4195,7 +4537,10 @@ document.getElementById('adminExport')?.addEventListener('click', async (ev)=>{
   ev.preventDefault();
   try{
     const s = Settings.load();
-    if(!s.useBackend) throw new Error('Aktifkan backend di tab Pengaturan terlebih dahulu.');
+    if(!s.useBackend){
+      alert('Ekspor korpus backend hanya tersedia jika backend aktif.');
+      return;
+    }
     const base = (s.backendUrl||'').trim();
     if(!base) throw new Error('Isi Backend Base URL sebelum mengekspor korpus.');
     const url = base.replace(/\/+$/,'') + '/api/export/json';
@@ -4307,6 +4652,16 @@ async function loadJsPDF(){
     document.head.appendChild(s);
   });
 }
+async function loadJSZip(){
+  if(window.JSZip) return window.JSZip;
+  return new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    s.onload = ()=> resolve(window.JSZip);
+    s.onerror = ()=> reject(new Error('Gagal memuat JSZip'));
+    document.head.appendChild(s);
+  });
+}
 
 async function exportRobustnessPDF(){
   try{
@@ -4316,7 +4671,7 @@ async function exportRobustnessPDF(){
     const doc = new jsPDF({ unit:'pt', format:'a4' });
     const pad = 24, line = 18;
     let y = pad;
-    doc.setFontSize(14); doc.text('MediaFinder — Laporan Robustness', pad, y); y+= line;
+    doc.setFontSize(14); doc.text('MediaFinder � Laporan Robustness', pad, y); y+= line;
     doc.setFontSize(10); const dts = new Date().toLocaleString(); doc.text('Dibuat: '+dts, pad, y); y+= line*1.5;
 
     // Capture canvases/tables inside robustness tab
@@ -4457,7 +4812,8 @@ function renderInsightPanel(options={}){
         label: 'Lihat di Analisis',
         handler: ()=>{
           document.querySelector('nav .tab-btn[data-tab="#tab-analisis"]')?.click();
-          setTimeout(()=> scrollToSection(document.querySelector('#panelInsights')), 80);
+          const panel = document.querySelector('#panelInsights');
+          if(panel){ setTimeout(()=> scrollToSection(panel), 80); }
         }
       }
     });
@@ -4567,6 +4923,8 @@ document.getElementById('refreshInsights')?.addEventListener('click', ()=>{
 });
 document.getElementById('push_enable')?.addEventListener('click', ()=> enableBackendPush());
 document.getElementById('push_disable')?.addEventListener('click', ()=> disableBackendPush());
+
+
 
 
 

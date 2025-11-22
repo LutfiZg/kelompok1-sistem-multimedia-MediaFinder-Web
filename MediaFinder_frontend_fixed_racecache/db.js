@@ -1,5 +1,5 @@
 const DB_NAME = 'mediafinder-db-v06';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 const STORE_ITEMS = 'items';
 const STORE_PHASH = 'phash';
 
@@ -32,6 +32,9 @@ function openDB(){
       if(!d.objectStoreNames.contains('insight_feedback')){
         const s6 = d.createObjectStore('insight_feedback', { keyPath: 'id', autoIncrement: true });
         s6.createIndex('by_key','insightKey',{unique:false});
+      }
+      if(!d.objectStoreNames.contains('events')){
+        d.createObjectStore('events', { keyPath: 'id' });
       }
     };
     req.onsuccess = ()=>{ db = req.result; resolve(db); };
@@ -218,3 +221,34 @@ function clearBackendSnapshot(){
 window.DB.saveBackendSnapshot = saveBackendSnapshot;
 window.DB.listBackendSnapshot = listBackendSnapshot;
 window.DB.clearBackendSnapshot = clearBackendSnapshot;
+
+// Event log (ringan, tanpa identitas)
+function logEvent(event){
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction('events','readwrite');
+    const store = tx.objectStore('events');
+    store.add(Object.assign({ ts: Date.now(), id: crypto.randomUUID?.() || Date.now() }, event));
+    tx.oncomplete = ()=> resolve(true);
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+function listEvents(limit=200){
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction('events','readonly');
+    const store = tx.objectStore('events');
+    const req = store.getAll();
+    req.onsuccess = ()=> resolve((req.result||[]).slice(-limit));
+    req.onerror = ()=> reject(req.error);
+  });
+}
+function clearEvents(){
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction('events','readwrite');
+    tx.objectStore('events').clear();
+    tx.oncomplete = ()=> resolve(true);
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+window.DB.logEvent = logEvent;
+window.DB.listEvents = listEvents;
+window.DB.clearEvents = clearEvents;
