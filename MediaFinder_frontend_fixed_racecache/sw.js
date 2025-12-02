@@ -1,6 +1,7 @@
 ﻿const STATIC_CACHE = 'mfw-static-v21';
 const DYNAMIC_CACHE = 'mfw-dynamic-v21';
 const OFFLINE_URL = './offline.html';
+const MAX_DYNAMIC_ENTRIES = 40;
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -60,7 +61,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirst(request));
+    event.respondWith(fetch(request));
     return;
   }
 
@@ -76,6 +77,7 @@ async function cacheFirst(request) {
     const response = await fetch(request);
     const cache = await caches.open(DYNAMIC_CACHE);
     cache.put(request, response.clone());
+    await trimCache(DYNAMIC_CACHE, MAX_DYNAMIC_ENTRIES);
     return response;
   } catch (err) {
     if (request.mode === 'navigate') {
@@ -86,11 +88,22 @@ async function cacheFirst(request) {
   }
 }
 
+async function trimCache(name, limit) {
+  const cache = await caches.open(name);
+  const keys = await cache.keys();
+  if (keys.length <= limit) return;
+  const over = keys.length - limit;
+  for (let i = 0; i < over; i++) {
+    await cache.delete(keys[i]);
+  }
+}
+
 async function networkFirst(request) {
   try {
     const response = await fetch(request);
     const cache = await caches.open(DYNAMIC_CACHE);
     cache.put(request, response.clone());
+    await trimCache(DYNAMIC_CACHE, MAX_DYNAMIC_ENTRIES);
     return response;
   } catch (err) {
     const cached = await caches.match(request);

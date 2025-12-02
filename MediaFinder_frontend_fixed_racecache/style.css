@@ -1,4 +1,7 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+/* Font fallback tanpa fetch jaringan; jika ingin Google Fonts, muat manual saat non-local-only */
+:root {
+  --font-primary: "Plus Jakarta Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
 
 /* =========================
    MediaFinder â€“ Clean UI Kit
@@ -72,7 +75,7 @@ html:focus-within { scroll-behavior: smooth; }
 
 body{
   margin:0;
-  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial, sans-serif;
+  font-family: var(--font-primary, "Plus Jakarta Sans", system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial, sans-serif);
   background:
     radial-gradient(circle at 18% 12%, rgba(79,70,229,0.16), transparent 38%),
     radial-gradient(circle at 82% 0%, rgba(14,165,233,0.12), transparent 40%),

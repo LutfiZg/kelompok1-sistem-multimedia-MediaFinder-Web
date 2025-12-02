@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +30,8 @@ type Config struct {
 	DBPath     string
 	APIKey     string
 	CORSOrigin string
+	CORSList   []string
+	AllowEmpty bool
 	UploadDir  string
 	CacheTTL   time.Duration
 }
@@ -49,10 +53,24 @@ func loadConfig() Config {
 		Listen:     getenv("MF_LISTEN", ":8088"),
 		DBPath:     getenv("MF_DB", "./data/mediafinder.db"),
 		APIKey:     getenv("MF_APIKEY", ""),
-		CORSOrigin: getenv("MF_CORS_ORIGIN", "*"),
+		CORSOrigin: getenv("MF_CORS_ORIGIN", "http://localhost:3000"),
+		CORSList:   parseOrigins(getenv("MF_CORS_ORIGIN", "http://localhost:3000")),
+		AllowEmpty: strings.EqualFold(getenv("MF_ALLOW_ORIGIN_EMPTY", "false"), "true"),
 		UploadDir:  getenv("MF_UPLOAD_DIR", "./data/uploads"),
 		CacheTTL:   ttl,
 	}
+}
+
+func parseOrigins(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" && p != "*" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ========== Models =========
@@ -176,8 +194,15 @@ type App struct {
 	cache   map[string]cacheEntry
 }
 type cacheEntry struct {
-	exp   time.Time
-	value []SearchRes
+	exp     time.Time
+	created time.Time
+	value   []SearchRes
+}
+
+func (a *App) invalidateCache() {
+	a.cacheMu.Lock()
+	a.cache = map[string]cacheEntry{}
+	a.cacheMu.Unlock()
 }
 
 // ========== DB =========
@@ -321,7 +346,24 @@ func toHex64(u uint64) string { return fmt.Sprintf("%016x", u) }
 // ========== Middleware =========
 func (a *App) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", a.cfg.CORSOrigin)
+		origin := r.Header.Get("Origin")
+		allowed := origin == "" && a.cfg.AllowEmpty
+		if !allowed {
+			for _, o := range a.cfg.CORSList {
+				if strings.EqualFold(o, origin) {
+					allowed = true
+					break
+				}
+			}
+		}
+		if !allowed {
+			http.Error(w, "origin not allowed", http.StatusForbidden)
+			return
+		}
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 		if r.Method == http.MethodOptions {
@@ -344,7 +386,11 @@ func (a *App) apikey(next http.Handler) http.Handler {
 // ========== Handlers =========
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"ok": true, "db": a.cfg.DBPath, "cache_ttl": a.cfg.CacheTTL.String()})
+	json.NewEncoder(w).Encode(map[string]any{
+		"ok":        true,
+		"db":        filepath.Base(a.cfg.DBPath),
+		"cache_ttl": a.cfg.CacheTTL.String(),
+	})
 }
 
 type IndexJSONReq struct {
@@ -359,6 +405,7 @@ type IndexJSONReq struct {
 }
 
 func (a *App) handleIndexJSON(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // limit ~10MB
 	var req IndexJSONReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -442,13 +489,14 @@ func (a *App) handleIndexJSON(w http.ResponseWriter, r *http.Request) {
 			a.lsh.Insert(u, itemID)
 		}
 	}
+	a.invalidateCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "id": itemID})
 }
 
 func (a *App) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(512 << 20); err != nil {
+	if err := r.ParseMultipartForm(100 << 20); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -650,6 +698,7 @@ type SearchRes struct {
 }
 
 func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 5<<20) // limit ~5MB
 	var req SearchReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -671,10 +720,10 @@ func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if req.MaxCand <= 0 {
 		req.MaxCand = 50
 	}
-	if req.WV <= 0 {
+	if req.WV < 0 {
 		req.WV = 0.5
 	}
-	if req.WA <= 0 {
+	if req.WA < 0 {
 		req.WA = 0.5
 	}
 
@@ -689,7 +738,21 @@ func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("q:%d:%v", len(qU), qU[0])
+	if req.UseAudio && len(req.QChroma) == 0 {
+		req.UseAudio = false
+	}
+	if !req.UseAudio {
+		req.WA = 0
+		if req.WV <= 0 {
+			req.WV = 1.0
+		}
+	}
+	if total := req.WV + req.WA; total > 0 {
+		req.WV = req.WV / total
+		req.WA = req.WA / total
+	}
+
+	key := searchCacheKey(req, qU)
 	a.cacheMu.Lock()
 	entry, ok := a.cache[key]
 	if ok && time.Now().Before(entry.exp) {
@@ -845,15 +908,77 @@ func (a *App) handleSearch(w http.ResponseWriter, r *http.Request) {
 		out = out[:req.K]
 	}
 
-	a.cacheMu.Lock()
-	a.cache[key] = cacheEntry{
-		exp:   time.Now().Add(a.cfg.CacheTTL),
-		value: out,
+	// approx size guard to avoid caching huge payloads
+	if est := len(out) * approxPerResult; est < maxCacheEntryBytes {
+		a.cacheMu.Lock()
+		defer a.cacheMu.Unlock()
+		if a.cacheSizeLocked()+est <= maxCacheBytes {
+			a.cache[key] = cacheEntry{
+				exp:     time.Now().Add(a.cfg.CacheTTL),
+				created: time.Now(),
+				value:   out,
+			}
+			a.pruneCacheLocked()
+		}
 	}
-	a.cacheMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"results": out})
+}
+
+func searchCacheKey(req SearchReq, qU []uint64) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "k:%d|max:%d|tol:%d|mc:%d|wv:%f|wa:%f|aud:%v|dur:%d|chroma:%d|hashes:",
+		req.K, req.MaxHam, req.BucketTol, req.MaxCand, req.WV, req.WA, req.UseAudio, req.Duration, len(req.QChroma))
+	for _, u := range qU {
+		fmt.Fprintf(h, "%x,", u)
+	}
+	if len(req.QChroma) > 0 {
+		for _, vec := range req.QChroma {
+			for _, v := range vec {
+				fmt.Fprintf(h, "%.6f,", v)
+			}
+			fmt.Fprint(h, "|")
+		}
+	}
+	sum := h.Sum(nil)
+	return "s:" + hex.EncodeToString(sum)[:16]
+}
+
+const (
+	maxCacheEntries    = 200
+	maxCacheBytes      = 512 * 1024
+	maxCacheEntryBytes = 256 * 1024
+	approxPerResult    = 128 // rough bytes per SearchRes
+)
+
+func (a *App) cacheSizeLocked() int {
+	total := 0
+	for _, v := range a.cache {
+		total += len(v.value) * approxPerResult
+	}
+	return total
+}
+
+func (a *App) pruneCacheLocked() {
+	// enforce entry count
+	for len(a.cache) > maxCacheEntries || a.cacheSizeLocked() > maxCacheBytes {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for k, v := range a.cache {
+			if first || v.created.Before(oldest) {
+				oldestKey = k
+				oldest = v.created
+				first = false
+			}
+		}
+		if oldestKey != "" {
+			delete(a.cache, oldestKey)
+		} else {
+			break
+		}
+	}
 }
 
 func (a *App) handleReset(w http.ResponseWriter, r *http.Request) {
@@ -866,9 +991,7 @@ func (a *App) handleReset(w http.ResponseWriter, r *http.Request) {
 	a.lsh = NewLSH()
 	a.idxMu.Unlock()
 
-	a.cacheMu.Lock()
-	a.cache = map[string]cacheEntry{}
-	a.cacheMu.Unlock()
+	a.invalidateCache()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
@@ -896,12 +1019,36 @@ func (a *App) handleExportJSON(w http.ResponseWriter, r *http.Request) {
 			}
 			hrows.Close()
 		}
-		enc.Encode(map[string]any{"item": it, "hashes": hs})
+		crows, _ := a.db.Query(`SELECT t,c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11 FROM chroma WHERE item_id=? ORDER BY t ASC`, it.ID)
+		var cs [][]float64
+		if crows != nil {
+			for crows.Next() {
+				var t int
+				var v [12]sql.NullFloat64
+				args := []any{&t, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9], &v[10], &v[11]}
+				crows.Scan(args...)
+				vec := make([]float64, 12)
+				for i := 0; i < 12; i++ {
+					if v[i].Valid {
+						vec[i] = v[i].Float64
+					}
+				}
+				cs = append(cs, vec)
+			}
+			crows.Close()
+		}
+		enc.Encode(map[string]any{"item": it, "hashes": hs, "chroma": cs})
 	}
 }
 
 func main() {
 	cfg := loadConfig()
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		log.Fatal("MF_APIKEY harus diset untuk menjalankan server")
+	}
+	if len(cfg.CORSList) == 0 {
+		log.Fatal("MF_CORS_ORIGIN harus diisi daftar origin yang diizinkan (pisahkan dengan koma). '*' tidak diperbolehkan.")
+	}
 	db, err := sql.Open("sqlite", cfg.DBPath+"?_busy_timeout=5000")
 	if err != nil {
 		log.Fatal(err)
@@ -920,25 +1067,27 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/health", app.handleHealth)
-	mux.HandleFunc("/api/items", app.handleItems)
-	mux.HandleFunc("/api/item", app.handleItem)
-	mux.HandleFunc("/api/item/preview", app.handleItemPreview)
-	mux.HandleFunc("/api/search", app.handleSearch)
-	mux.HandleFunc("/api/export/json", app.handleExportJSON)
+	publicMux := http.NewServeMux()
+	publicMux.HandleFunc("/api/health", app.handleHealth)
 
 	protected := http.NewServeMux()
+	protected.HandleFunc("/api/items", app.handleItems)
+	protected.HandleFunc("/api/item", app.handleItem)
+	protected.HandleFunc("/api/search", app.handleSearch)
+	protected.HandleFunc("/api/export/json", app.handleExportJSON)
 	protected.HandleFunc("/api/index/json", app.handleIndexJSON)
 	protected.HandleFunc("/api/index/upload", app.handleUpload)
 	protected.HandleFunc("/api/reset", app.handleReset)
+	protected.HandleFunc("/api/item/preview", app.handleItemPreview)
 
 	h := app.cors(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/index/") || r.URL.Path == "/api/reset" {
-			app.apikey(protected).ServeHTTP(w, r)
+		if r.URL.Path == "/api/health" {
+			publicMux.ServeHTTP(w, r)
 			return
 		}
-		mux.ServeHTTP(w, r)
+		app.apikey(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			protected.ServeHTTP(w, r)
+		})).ServeHTTP(w, r)
 	}))
 
 	log.Printf("MediaFinder backend v4 (Fixed) listening on %s\n", cfg.Listen)

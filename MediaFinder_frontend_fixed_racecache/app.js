@@ -658,6 +658,8 @@ async function enableBackendPush(){
       });
     }catch(e){
       console.warn('Gagal mendaftarkan subscription ke backend', e);
+      await sub.unsubscribe().catch(()=>{});
+      throw e;
     }
     const current = Settings.load();
     current.vapidKey = vapid;
@@ -674,6 +676,9 @@ async function enableBackendPush(){
   }catch(e){
     console.error(e);
     alert('Gagal mengaktifkan push: '+(e?.message||e));
+    const current = Settings.load();
+    current.pushEnabled = false;
+    Settings.save(current);
     updatePushState('off');
   }
 }
@@ -1563,8 +1568,18 @@ async function refreshTable(opts={}){
           const chromaCount = (typeof it.chroma_count === 'number') ? it.chroma_count : (it.chroma||0);
           totalHashes += hashCount;
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${it.name}</td><td>${it.duration}</td><td>${hashCount}</td><td>${chromaCount}</td>
-      <td><button class="secondary" data-view="${it.id}" data-source="backend">Lihat</button></td>`;
+          const tdName = document.createElement('td'); tdName.textContent = it.name || '-';
+          const tdDur = document.createElement('td'); tdDur.textContent = it.duration ?? '';
+          const tdHash = document.createElement('td'); tdHash.textContent = hashCount;
+          const tdChroma = document.createElement('td'); tdChroma.textContent = chromaCount;
+          const tdAction = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.className = 'secondary';
+          btn.dataset.view = it.id;
+          btn.dataset.source = 'backend';
+          btn.textContent = 'Lihat';
+          tdAction.appendChild(btn);
+          tr.append(tdName, tdDur, tdHash, tdChroma, tdAction);
           tbody.appendChild(tr);
         });
         tbody.querySelectorAll('button[data-view]').forEach(btn=>{
@@ -1592,7 +1607,10 @@ async function refreshTable(opts={}){
     }catch(err){
       console.error(err);
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td colspan="5">Gagal memuat data backend: ${err?.message||err}</td>`;
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.textContent = `Gagal memuat data backend: ${err?.message||err}`;
+      tr.appendChild(td);
       tbody.appendChild(tr);
       updateHeroStats({
         mode: 'Mode Backend',
@@ -1617,8 +1635,18 @@ async function refreshTable(opts={}){
     let chromaCount = 0;
     try{ chromaCount = await DB.countChroma(it.id); }catch(_){}
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${it.name}</td><td>${it.duration}</td><td>${hashes.length}</td><td>${chromaCount}</td>
-      <td><button class="secondary" data-view="${it.id}" data-source="local">Lihat</button></td>`;
+    const tdName = document.createElement('td'); tdName.textContent = it.name || '-';
+    const tdDur = document.createElement('td'); tdDur.textContent = it.duration ?? '';
+    const tdHash = document.createElement('td'); tdHash.textContent = hashes.length;
+    const tdChroma = document.createElement('td'); tdChroma.textContent = chromaCount;
+    const tdAction = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.className = 'secondary';
+    btn.dataset.view = it.id;
+    btn.dataset.source = 'local';
+    btn.textContent = 'Lihat';
+    tdAction.appendChild(btn);
+    tr.append(tdName, tdDur, tdHash, tdChroma, tdAction);
     tbody.appendChild(tr);
   }
   tbody.querySelectorAll('button[data-view]').forEach(btn=>{
@@ -1848,22 +1876,24 @@ searchBtn.addEventListener('click', async () => {
   if(fill) fill.style.width = '40%';
   if(label) label.textContent = 'Ekstraksi audio (opsional)...';
 
+  let useAudio = document.getElementById('useAudio')?.checked;
   try {
-    const useAudio = document.getElementById('useAudio')?.checked;
     if (useAudio) {
       const a = await extractAudioChromaFromFile(f, segSec);
       q._chromaSegs = a.chromaSegs ?? [];
     } else {
       q._chromaSegs = [];
     }
-    q._segSec = segSec;
   } catch (e) {
-    // opsional: log agar tidak �kosong�
     console.error(e);
     slog(`Gagal ekstrak audio: ${e.message}`);
     q._chromaSegs = [];
-    q._segSec = segSec;
   }
+  if(!Array.isArray(q._chromaSegs) || q._chromaSegs.length === 0){
+    useAudio = false;
+  }
+  q._useAudio = useAudio;
+  q._segSec = segSec;
 
   lastQueryData = q;
   slog(`Durasi ${q.duration}s; ${q.hashes.length} hash;`);
@@ -1875,15 +1905,16 @@ searchBtn.addEventListener('click', async () => {
     if(fill) fill.style.width = '65%';
     if(label) label.textContent = 'Mengirim kueri ke backend...';
     try {
+      const hasChroma = Array.isArray(q._chromaSegs) && q._chromaSegs.length > 0 && q._useAudio;
       const payload = {
         hashes: q.hashes.map(h => h.hash),
         duration: q.duration,
         k: 10,
         max_hamming: 14,
-        wv: getWV(),
-        wa: getWA(),
-        use_audio: document.getElementById('useAudio')?.checked,
-        q_chroma: (q._chromaSegs || []).map(seg => seg.chroma)
+        wv: hasChroma ? getWV() : 1,
+        wa: hasChroma ? getWA() : 0,
+        use_audio: hasChroma,
+        q_chroma: hasChroma ? (q._chromaSegs || []).map(seg => seg.chroma) : []
       };
 
       const response = await apiFetch('/api/search', {
@@ -2437,6 +2468,10 @@ document.getElementById('exportCsv')?.addEventListener('click', ()=>{
 // Share ringkas: PNG snapshot tab Analisis
 document.getElementById('exportPng')?.addEventListener('click', async ()=>{
   try{
+    if(isLocalOnly && isLocalOnly()){
+      alert('Mode Local-only aktif: ekspor PNG membutuhkan html2canvas dari CDN.');
+      return;
+    }
     const section = document.querySelector('#tab-analisis');
     if(!section){ alert('Tab Analisis belum dibuka.'); return; }
     activateTab('#tab-analisis');
@@ -2765,7 +2800,7 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
         const blockH = body.length * 12;
         ensureSpace(blockH + 6);
         body.forEach((line, idx)=>{
-          const prefix = idx===0 ? '�' : ' ';
+          const prefix = idx===0 ? '-' : ' ';
           doc.text(`${prefix} ${line}`, PAD, y + idx * 12);
         });
         y += blockH + 6;
@@ -2815,9 +2850,21 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
     drawSection('Timeline Kemiripan');
     addCanvasImage(document.getElementById('timeline'));
     drawSection('Heatmap Kueri vs Target');
-    addCanvasImage(document.getElementById('heatmap'));
+    const hmCanvas = document.getElementById('heatmap');
+    if(hmCanvas?.width && hmCanvas?.height){
+      addCanvasImage(hmCanvas);
+    }else{
+      doc.setFontSize(9); doc.setTextColor(107,114,128);
+      doc.text('Heatmap belum dihitung atau canvas kosong.', PAD, y); y += LINE;
+    }
     drawSection('Plot Alignment / DTW');
-    addCanvasImage(document.getElementById('alignPlot'));
+    const alignCanvas = document.getElementById('alignPlot');
+    if(alignCanvas?.width && alignCanvas?.height){
+      addCanvasImage(alignCanvas);
+    }else{
+      doc.setFontSize(9); doc.setTextColor(107,114,128);
+      doc.text('Alignment belum dijalankan atau canvas kosong.', PAD, y); y += LINE;
+    }
     const peaks = (window.__topPeaks && window.__topPeaks.length) ? window.__topPeaks :
       (typeof topNPeaks === 'function' ? topNPeaks(fused, 5, 3) : []);
     drawSection('Top Segmen Mirip', 'Daftar segmen prioritas untuk inspeksi manual.');
@@ -2863,12 +2910,48 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
       doc.text('Gambar snapshot tersedia pada aplikasi dan dapat diunduh terpisah (menu Snapshot).', PAD, y);
       y += LINE;
     }
+    const ev = window.__evResults;
+    if(ev?.summary){
+      drawSection('Evaluasi Sistem', 'Ringkasan precision/recall dari modul evaluasi internal.');
+      const s = ev.summary;
+      drawCardGrid([
+        { label:'Query', value: s.n || 0, meta:'Jumlah query evaluasi' },
+        { label:'Precision@k', value: s.precision?.toFixed(3) ?? '-', meta:'Proporsi hasil benar di top-k' },
+        { label:'Recall@k', value: s.recall?.toFixed(3) ?? '-', meta:'Proporsi query yang menemukan GT' },
+        { label:'F1', value: s.f1?.toFixed(3) ?? '-', meta:'Harmonik precision/recall' },
+        { label:'ROC AUC', value: (s.auc ?? 0).toFixed(3), meta:'Distribusi skor kandidat' },
+        { label:'t_extract avg (ms)', value: s.tExtractAvg?.toFixed(1) ?? '-', meta:'Rata-rata ekstraksi query' },
+        { label:'t_search avg (ms)', value: s.tSearchAvg?.toFixed(1) ?? '-', meta:'Rata-rata pencarian' }
+      ], 3);
+      if(Array.isArray(ev.results) && ev.results.length){
+        const evalRows = ev.results.slice(0, 8).map((r, i)=>[
+          i+1,
+          r.gtName || '-',
+          `${r.start}s / ${r.dur}s`,
+          r.top1?.name || '-',
+          r.hitAtK ? 'Ya' : 'Tidak',
+          Number.isFinite(r.top1?.score) ? r.top1.score.toFixed(3) : '-',
+          r.tExtract,
+          r.tSearch
+        ]);
+        drawTable([
+          { title:'No', width:30 },
+          { title:'GT', width:140 },
+          { title:'Start/Dur', width:90 },
+          { title:'Top-1', width:140 },
+          { title:'Hit@k', width:60 },
+          { title:'Score@1', width:80 },
+          { title:'t_extract', width:80 },
+          { title:'t_search', width:80 }
+        ], evalRows);
+      }
+    }
     const notes = [];
     if(fused.length){
       if(globalScore >= 0.8){
         notes.push('Skor global di atas 0.80 menunjukkan kecocokan yang sangat kuat antara kueri dan target.');
       }else if(globalScore <= 0.4){
-        notes.push('Skor global di bawah 0.40 � kemungkinan kecocokan rendah, verifikasi ulang kandidat lain.');
+        notes.push('Skor global di bawah 0.40: kemungkinan kecocokan rendah, verifikasi ulang kandidat lain.');
       }
       if(stdDev <= 0.05){
         notes.push('Variasi skor timeline rendah; pola kemiripan relatif stabil di sepanjang durasi.');
@@ -2890,7 +2973,19 @@ document.getElementById('exportPdf')?.addEventListener('click', async ()=>{
     }
     if(notes.length){
       drawSection('Catatan Analisis', 'Insight manual yang perlu diperhatikan.');
-      addBulletList(notes);
+      doc.setFontSize(10);
+      doc.setTextColor(...palette.muted);
+      notes.forEach(text=>{
+        const body = doc.splitTextToSize(text, contentWidth - 24);
+        const blockH = body.length * 12;
+        ensureSpace(blockH + 6);
+        body.forEach((line, idx)=>{
+          const prefix = idx===0 ? '-' : ' ';
+          doc.text(`${prefix} ${line}`, PAD, y + idx * 12);
+        });
+        y += blockH + 6;
+      });
+      y += 4;
     }
     const insights = buildInsightExportPayload();
     if(insights.length){
@@ -3146,6 +3241,10 @@ document.getElementById('downloadShots')?.addEventListener('click', async ()=>{
   const shots = window.__shots || [];
   if(shots.length===0){ alert('Belum ada snapshot.'); return; }
   try{
+    if(isLocalOnly && isLocalOnly()){
+      alert('Mode Local-only aktif: export ZIP membutuhkan JSZip dari CDN.');
+      throw new Error('local-only');
+    }
     const JSZipLib = window.JSZip || await loadJSZip().catch(()=>null);
     if(JSZipLib){
       const zip = new JSZipLib();
@@ -3180,19 +3279,65 @@ window.__rbHistory = window.__rbHistory || [];
 async function loadFF(){ 
   if(__ff) return __ff;
   if(isLocalOnly()){ alert('Mode Local-only aktif. Robustness (ffmpeg) dinonaktifkan.'); throw new Error('local-only'); }
+  const FFMPEG_VER = '0.12.10';
+  const FFMPEG_CORE_VER = '0.12.10';
+  const FF_SOURCES = [
+    new URL('./ffmpeg/ffmpeg.js', document.baseURI || location.href).toString(), // relative to app root
+    `${location.origin}/ffmpeg/ffmpeg.js`,
+    `https://unpkg.com/@ffmpeg/ffmpeg@${FFMPEG_VER}/dist/umd/ffmpeg.js`,
+    `https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@${FFMPEG_VER}/dist/umd/ffmpeg.js`
+  ];
   if(!window.FFmpeg || !window.FFmpeg.createFFmpeg){
-    await new Promise((resolve, reject)=>{
-      const s = document.createElement('script');
-      s.src = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/ffmpeg.min.js';
-      s.onload = ()=> resolve();
-      s.onerror = ()=> reject(new Error('ffmpeg.wasm tidak tersedia. Pastikan koneksi internet.'));
-      document.head.appendChild(s);
-    });
+    let lastErr = null;
+    for(const src of FF_SOURCES){
+      try{
+        // cek eksistensi untuk self-host; jika 404, lanjut ke sumber berikutnya
+        if(src.startsWith(location.origin)){
+          try{
+            const head = await fetch(src, { method:'HEAD' });
+            if(!head.ok){
+              rbLog?.(`ffmpeg local missing at ${src} (${head.status})`);
+              continue;
+            }
+          }catch(_){
+            rbLog?.(`ffmpeg local not reachable at ${src}`);
+            continue;
+          }
+        }
+        await new Promise((resolve, reject)=>{
+          const s = document.createElement('script');
+          s.src = src;
+          s.crossOrigin = 'anonymous';
+          s.onload = ()=> resolve();
+          s.onerror = ()=> reject(new Error('Gagal memuat '+src));
+          document.head.appendChild(s);
+        });
+        const url = new URL(src, location.href);
+        // core path mengikuti versi yang sama jika sumber dari npm/unpkg; jika self-host, letakkan ffmpeg-core.js/.wasm di folder yang sama
+        if(url.hostname.includes('unpkg.com')){
+          window.__ffmpegCorePath = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VER}/dist/umd`;
+        }else if(url.hostname.includes('jsdelivr.net')){
+          window.__ffmpegCorePath = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VER}/dist/umd`;
+        }else{
+          window.__ffmpegCorePath = new URL('.', url).toString();
+        }
+        break;
+      }catch(e){
+        lastErr = e;
+        rbLog?.(`ffmpeg load fail: ${e?.message||e}`);
+      }
+    }
+    if(!window.FFmpeg || !window.FFmpeg.createFFmpeg){
+      throw lastErr || new Error('ffmpeg.wasm tidak tersedia. Pastikan koneksi internet atau letakkan ffmpeg.js & ffmpeg-core.js/wasm di /ffmpeg/.');
+    }
   }
-  if(!window.FFmpeg || !window.FFmpeg.createFFmpeg){ throw new Error('ffmpeg.wasm tidak tersedia.'); }
-  const corePath = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/ffmpeg-core.js';
-  __ff = window.FFmpeg.createFFmpeg({ log: true, corePath });
-  slog('Memuat ffmpeg.wasm ... (~25�30MB)'); await __ff.load(); slog('ffmpeg.wasm siap.');
+  const corePath = window.__ffmpegCorePath || `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VER}/dist/umd`;
+  __ff = window.FFmpeg.createFFmpeg({
+    log: true,
+    corePath,
+    mainName: 'ffmpeg-core'
+  });
+  slog('Memuat ffmpeg.wasm ... (~25-30MB)'); await __ff.load(); slog('ffmpeg.wasm siap.');
   return __ff;
 }
 function rbLog(msg){ const el = document.getElementById('rbLog'); if(!el) return; el.textContent += (msg+'\\n'); el.scrollTop = el.scrollHeight; }
@@ -3384,7 +3529,10 @@ function pushRobustnessResult(entry){
   const tbody = document.querySelector('#rbTable tbody');
   if(tbody){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${entry.label}</td><td>${(entry.size/1024/1024).toFixed(2)} MB</td><td>${entry.score.toFixed(3)}</td>`;
+    const tdLabel = document.createElement('td'); tdLabel.textContent = entry.label || '-';
+    const tdSize = document.createElement('td'); tdSize.textContent = `${(entry.size/1024/1024).toFixed(2)} MB`;
+    const tdScore = document.createElement('td'); tdScore.textContent = entry.score.toFixed(3);
+    tr.append(tdLabel, tdSize, tdScore);
     tbody.appendChild(tr);
   }
 }
@@ -3489,8 +3637,24 @@ function renderRbScheduleTable(){
   }else{
     rows.forEach(job=>{
       const tr = document.createElement('tr');
-      const sub = job.campaign ? `<div class="hint">${job.campaign}</div>` : '';
-      tr.innerHTML = `<td><strong>${job.version||'-'}</strong>${sub}</td><td>${job.res} / CRF${job.crf}</td><td>${formatSchedulerRange(job)}</td><td><button class="ghost tiny" data-sched-remove="${job.id}">Hapus</button></td>`;
+      const tdVer = document.createElement('td');
+      const strong = document.createElement('strong'); strong.textContent = job.version || '-';
+      tdVer.appendChild(strong);
+      if(job.campaign){
+        const div = document.createElement('div');
+        div.className = 'hint';
+        div.textContent = job.campaign;
+        tdVer.appendChild(div);
+      }
+      const tdVar = document.createElement('td'); tdVar.textContent = `${job.res} / CRF${job.crf}`;
+      const tdRange = document.createElement('td'); tdRange.textContent = formatSchedulerRange(job);
+      const tdAct = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'ghost tiny';
+      btn.dataset.schedRemove = job.id;
+      btn.textContent = 'Hapus';
+      tdAct.appendChild(btn);
+      tr.append(tdVer, tdVar, tdRange, tdAct);
       tbody.appendChild(tr);
     });
     tbody.querySelectorAll('button[data-sched-remove]')?.forEach(btn=>{
@@ -3522,7 +3686,11 @@ function renderRbHistoryTable(){
   rows.slice(0, RB_HISTORY_LIMIT).forEach(row=>{
     const tr = document.createElement('tr');
     const time = new Date(row.timestamp||Date.now()).toLocaleString('id-ID');
-    tr.innerHTML = `<td>${time}</td><td>${row.version||'-'}</td><td>${row.label}</td><td>${(row.score||0).toFixed(3)}</td>`;
+    const tdTime = document.createElement('td'); tdTime.textContent = time;
+    const tdVer = document.createElement('td'); tdVer.textContent = row.version || '-';
+    const tdLabel = document.createElement('td'); tdLabel.textContent = row.label || '';
+    const tdScore = document.createElement('td'); tdScore.textContent = (row.score||0).toFixed(3);
+    tr.append(tdTime, tdVer, tdLabel, tdScore);
     tbody.appendChild(tr);
   });
 }
@@ -4014,7 +4182,11 @@ function ev_updateStorageTable(rows){
   tb.innerHTML = '';
   rows.forEach(r=>{
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${r.name}</td><td>${r.pHash}</td><td>${r.chroma}</td><td>${r.sizeMB.toFixed(2)}</td>`;
+    const tdName = document.createElement('td'); tdName.textContent = r.name || '-';
+    const tdP = document.createElement('td'); tdP.textContent = r.pHash;
+    const tdC = document.createElement('td'); tdC.textContent = r.chroma;
+    const tdS = document.createElement('td'); tdS.textContent = r.sizeMB.toFixed(2);
+    tr.append(tdName, tdP, tdC, tdS);
     tb.appendChild(tr);
   });
 }
@@ -4037,9 +4209,22 @@ function ev_updateSummary(sum){
 function ev_appendRow(i, row){
   const tb = document.querySelector('#ev_table tbody'); if(!tb) return;
   const tr = document.createElement('tr');
-  tr.innerHTML = `<td>${i+1}</td><td>${row.gtName}</td><td>${row.start}</td><td>${row.dur}</td>
-    <td>${row.top1?.name||'-'}</td><td>${row.hitAtK? 'Ya' : 'Tidak'}</td>
-    <td>${row.top1?.score?.toFixed(3)||'-'}</td><td>${row.tExtract}</td><td>${row.tSearch}</td>`;
+  const cells = [
+    i+1,
+    row.gtName,
+    row.start,
+    row.dur,
+    row.top1?.name||'-',
+    row.hitAtK? 'Ya' : 'Tidak',
+    row.top1?.score?.toFixed(3)||'-',
+    row.tExtract,
+    row.tSearch
+  ];
+  cells.forEach(val=>{
+    const td = document.createElement('td');
+    td.textContent = val;
+    tr.appendChild(td);
+  });
   tb.appendChild(tr);
 }
 
@@ -4439,8 +4624,18 @@ async function loadCorpus(){
   setCorpusLoading(false);
   (data.items||[]).forEach((it,idx)=>{
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${(page-1)*size+idx+1}</td><td>${it.name}</td><td>${it.duration}s</td><td>${it.bucket}</td><td>${it.created_at||it.created||''}</td>
-      <td><button data-loadid="${it.id}" aria-label="Analisis ${it.name}">Analisis</button></td>`;
+    const tdNo = document.createElement('td'); tdNo.textContent = (page-1)*size+idx+1;
+    const tdName = document.createElement('td'); tdName.textContent = it.name || '-';
+    const tdDur = document.createElement('td'); tdDur.textContent = `${it.duration}s`;
+    const tdBucket = document.createElement('td'); tdBucket.textContent = it.bucket;
+    const tdCreated = document.createElement('td'); tdCreated.textContent = it.created_at||it.created||'';
+    const tdAction = document.createElement('td');
+    const btn = document.createElement('button');
+    btn.dataset.loadid = it.id;
+    btn.setAttribute('aria-label', `Analisis ${it.name}`);
+    btn.textContent = 'Analisis';
+    tdAction.appendChild(btn);
+    tr.append(tdNo, tdName, tdDur, tdBucket, tdCreated, tdAction);
     tb.appendChild(tr);
   });
   if(info) info.textContent = `Total ${data.total||0} item  Page ${data.page||page}`;
@@ -4459,7 +4654,14 @@ document.getElementById('cp_load')?.addEventListener('click', ()=>{
     console.error(e);
     const tb = document.querySelector('#cp_table tbody');
     if(tb){
-      tb.innerHTML = `<tr class="loading-row"><td colspan="6">Gagal memuat korpus: ${e?.message||e}</td></tr>`;
+      const tr = document.createElement('tr');
+      tr.className = 'loading-row';
+      const td = document.createElement('td');
+      td.colSpan = 6;
+      td.textContent = `Gagal memuat korpus: ${e?.message||e}`;
+      tr.appendChild(td);
+      tb.innerHTML = '';
+      tb.appendChild(tr);
     }
     const table = document.getElementById('cp_table');
     if(table) table.setAttribute('aria-busy','false');
@@ -4655,6 +4857,9 @@ async function loadJsPDF(){
 async function loadJSZip(){
   if(window.JSZip) return window.JSZip;
   return new Promise((resolve, reject)=>{
+    if(isLocalOnly && isLocalOnly()){
+      return reject(new Error('local-only'));
+    }
     const s = document.createElement('script');
     s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
     s.onload = ()=> resolve(window.JSZip);

@@ -11,6 +11,10 @@ function hamming64(a,b){
 onmessage = (e)=>{
   const { q, t, maxSize=200 } = e.data||{};
   const n=q.length, m=t.length;
+  if(!Array.isArray(q) || !Array.isArray(t) || n===0 || m===0){
+    postMessage({ id: (typeof __reqId!=='undefined'?__reqId:null), H: [], sx:1, sy:1, path: [] });
+    return;
+  }
   const sx = Math.max(1, Math.floor(m/Math.min(m,maxSize)));
   const sy = Math.max(1, Math.floor(n/Math.min(n,maxSize)));
   const H = [];
