@@ -5,10 +5,10 @@ Aplikasi web untuk pengindeksan dan pencarian kemiripan konten video menggunakan
 ## Identitas Karya
 - **Nama Aplikasi**: MediaFinder Web
 - **Kelompok**: Kelompok 1
-- **Anggota/Pencipta yang tercantum**:
+- **Anggota Kelompok**:
   - Lutfi Ghifari Hibban
-  - Wilky Fawwaz Al Makis
   - Ahid Novryan
+- **Dosen Pengampu**: Wikky Fawwaz Al Maki
 
 ## Fitur Utama
 - **Indeks Video**: Ekstraksi pHash visual dan chroma audio dari file video.

@@ -1,11 +1,11 @@
 ﻿{
   "name": "MediaFinder Intelligence Suite",
   "short_name": "MediaFinder",
-  "description": "Indeks & pencarian kemiripan video berbasis pHash dan fingerprint audio. Dibuat oleh Kelompok 1: Lutfi Ghifari Hibban, Wilky Fawwaz Al Makis, dan Ahid Novryan.",
+  "description": "Indeks & pencarian kemiripan video berbasis pHash dan fingerprint audio. Dibuat oleh Kelompok 1: Lutfi Ghifari Hibban, Ahid Novryan, dan Wikky Fawwaz Al Maki.",
   "authors": [
     "Lutfi Ghifari Hibban",
-    "Wilky Fawwaz Al Makis",
-    "Ahid Novryan"
+    "Ahid Novryan",
+    "Wikky Fawwaz Al Maki"
   ],
   "start_url": "./index.html",
   "scope": "./",

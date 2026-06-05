@@ -66,7 +66,7 @@ Field `preview_path` menunjuk ke file pada `MF_UPLOAD_DIR` (mis. hasil dari endp
 ## Identitas Karya
 - **Nama Aplikasi**: MediaFinder Web
 - **Kelompok**: Kelompok 1
-- **Anggota/Pencipta yang tercantum**:
+- **Anggota Kelompok**:
   - Lutfi Ghifari Hibban
-  - Wilky Fawwaz Al Makis
   - Ahid Novryan
+- **Dosen Pengampu**: Wikky Fawwaz Al Maki
