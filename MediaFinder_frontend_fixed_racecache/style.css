@@ -444,22 +444,23 @@ nav .tab-btn.active{ background: var(--pill-act); border-color: transparent; }
   gap:8px;
 }
 .team-credits li{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
+  display:block;
   padding:10px 12px;
   border-radius:12px;
   background:rgba(255,255,255,0.08);
   border:1px solid rgba(255,255,255,0.14);
 }
 .team-credits li strong{
+  display:block;
+  margin-bottom:2px;
   color:#fff;
+  line-height:1.35;
 }
 .team-credits li span{
+  display:block;
   color:rgba(255,255,255,0.78);
   font-size:12px;
-  white-space:nowrap;
+  line-height:1.4;
 }
 :root.light .team-credits{
   background:rgba(255,255,255,0.72);
