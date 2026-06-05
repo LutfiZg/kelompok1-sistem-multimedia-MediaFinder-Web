@@ -2,6 +2,14 @@
 
 Aplikasi web untuk pengindeksan dan pencarian kemiripan konten video menggunakan perceptual hashing (pHash) dan audio chroma fingerprinting. Semua pemrosesan dilakukan di sisi klien (dalam browser).
 
+## Identitas Karya
+- **Nama Aplikasi**: MediaFinder Web
+- **Kelompok**: Kelompok 1
+- **Anggota/Pencipta yang tercantum**:
+  - Lutfi Ghifari Hibban
+  - Wilky Fawwaz Al Makis
+  - Ahid Novryan
+
 ## Fitur Utama
 - **Indeks Video**: Ekstraksi pHash visual dan chroma audio dari file video.
 - **Pencarian Cepat**: Menemukan klip yang mirip secara visual dan audio.

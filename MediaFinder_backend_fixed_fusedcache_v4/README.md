@@ -62,3 +62,11 @@ Field `preview_path` menunjuk ke file pada `MF_UPLOAD_DIR` (mis. hasil dari endp
 ## v3 (this folder)
 - Endpoint `/api/search` kini menerima **`q_chroma`** (array `[ [12], [12], ... ]`) untuk **fusion audio** server-side yang akurat.
 - Frontend v1.6 mengirim `q_chroma` saat tersedia.
+
+## Identitas Karya
+- **Nama Aplikasi**: MediaFinder Web
+- **Kelompok**: Kelompok 1
+- **Anggota/Pencipta yang tercantum**:
+  - Lutfi Ghifari Hibban
+  - Wilky Fawwaz Al Makis
+  - Ahid Novryan
