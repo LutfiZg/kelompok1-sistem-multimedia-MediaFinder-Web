@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm install
+      - run: npm run test:unit
+
+  backend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MediaFinder_backend_fixed_fusedcache_v4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: MediaFinder_backend_fixed_fusedcache_v4/go.mod
+          cache-dependency-path: MediaFinder_backend_fixed_fusedcache_v4/go.sum
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./cmds/server
